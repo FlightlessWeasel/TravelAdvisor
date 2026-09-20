@@ -1,0 +1,20 @@
+# WoW Addon development
+*.bak
+*.tmp
+*~
+
+# IDE/Editor files
+.vscode/
+.idea/
+.codex/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Package files (if using packager)
+.release/
+.pkgmeta

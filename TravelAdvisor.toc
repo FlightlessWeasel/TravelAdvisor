@@ -1,0 +1,28 @@
+## Interface: 120100
+## Author: jason
+## Title: Travel Advisor
+## Notes: Scans your spells and tells you the fastest way to get anywhere
+## Version: 0.1
+## IconTexture: Interface\Icons\INV_Misc_Map_01.blp
+## SavedVariablesPerCharacter: TravelAdvisor_Settings
+## Category: Map
+## AddonCompartmentFunc: TravelAdvisor_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: TravelAdvisor_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: TravelAdvisor_OnAddonCompartmentLeave
+
+# Libraries
+Libs\LibStub\LibStub.lua
+Libs\LibZoneNameToMap-1.0\LibZoneNameToMap-1.0.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+
+# Data
+TravelData.lua
+TravelSources.lua
+
+# Graph
+TravelGraph.lua
+TravelAdvisorSettings.lua
+
+# Core
+TravelAdvisor.lua
