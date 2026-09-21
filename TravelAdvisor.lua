@@ -21,6 +21,11 @@ local CreateFrame = CreateFrame
 
 local function IsSecretValue(value)
     if value == nil then return false end
+    local source = TA.TravelSources and TA.TravelSources.IsSecretValue
+    if type(source) == "function" then
+        local ok, secret = pcall(source, value)
+        if ok then return secret == true end
+    end
     local checker = _G.issecretvalue
     if type(checker) ~= "function" then return false end
     local ok, secret = pcall(checker, value)
@@ -28,6 +33,11 @@ local function IsSecretValue(value)
 end
 
 local function SafeNumber(value, fallback)
+    local source = TA.TravelSources and TA.TravelSources.SafeNumber
+    if type(source) == "function" then
+        local ok, number = pcall(source, value)
+        if ok then return number ~= nil and number or fallback end
+    end
     if value == nil or IsSecretValue(value) then return fallback end
     local ok, number = pcall(tonumber, value)
     if not ok or number == nil or IsSecretValue(number) or type(number) ~= "number" then
@@ -37,11 +47,21 @@ local function SafeNumber(value, fallback)
 end
 
 local function SafeString(value, fallback)
+    local sources = TA.TravelSources
+    if sources and type(sources.SafeString) == "function" then
+        local ok, result = pcall(sources.SafeString, value)
+        if ok then return result or fallback end
+    end
     if value == nil or IsSecretValue(value) or type(value) ~= "string" then return fallback end
-    return value
+    return value ~= "" and value or fallback
 end
 
 local function SafeBoolean(value)
+    local source = TA.TravelSources and TA.TravelSources.SafeBoolean
+    if type(source) == "function" then
+        local ok, result = pcall(source, value)
+        if ok then return result end
+    end
     if value == nil or IsSecretValue(value) then return nil end
     return value == true
 end
@@ -81,6 +101,7 @@ TA._pendingDisplay = nil
 TA._cooldownRefreshGeneration = 0
 TA._secureActionButtons = {}
 TA._secureActionButtonsPendingHide = false
+TA._destinationFilterRefreshScheduled = false
 
 -- Coalesce zone-change handling: only one pending 0.5s timer (avoids duplicate work when multiple events fire)
 TA._zoneChangePending = false
@@ -412,6 +433,8 @@ function TA:SetRouteWaypoints(route, destinationName, destinationMapID)
     
     -- Helper to add waypoint if not duplicate
     local function addWP(mapID, x, y, name, isFirst)
+        mapID = SafeNumber(mapID)
+        if not mapID or self:IsWaypointUnverified(mapID) then return nil end
         -- Skip if we already have a waypoint for this mapID
         if addedMapIDs[mapID] then return nil end
         addedMapIDs[mapID] = true
@@ -450,8 +473,11 @@ function TA:SetRouteWaypoints(route, destinationName, destinationMapID)
     end
     
     -- Add final destination waypoint if we have a destination
-    if destinationMapID and destinationMapID > 0 and not addedMapIDs[destinationMapID] then
-        local destHub = self:GetHubByMapID(destinationMapID)
+    local safeDestinationMapID = SafeNumber(destinationMapID)
+    if safeDestinationMapID and safeDestinationMapID > 0
+        and not self:IsWaypointUnverified(safeDestinationMapID)
+        and not addedMapIDs[safeDestinationMapID] then
+        local destHub = self:GetHubByMapID(safeDestinationMapID)
         local x, y = 50, 50
         local name = "Destination: " .. (destinationName or "Unknown")
         
@@ -461,12 +487,13 @@ function TA:SetRouteWaypoints(route, destinationName, destinationMapID)
             name = "Destination: " .. (destHub.name or destinationName or "Unknown")
         end
         
-        addWP(destinationMapID, x, y, name, waypointsSet == 0)
+        addWP(safeDestinationMapID, x, y, name, waypointsSet == 0)
     end
     
     -- If we still have no waypoints and route has a waypointMapID, try that as a last resort
-    if waypointsSet == 0 and route.waypointMapID and route.waypointMapID > 0 then
-        local hub = self:GetHubByMapID(route.waypointMapID)
+    local safeWaypointMapID = SafeNumber(route.waypointMapID)
+    if waypointsSet == 0 and safeWaypointMapID and safeWaypointMapID > 0 then
+        local hub = self:GetHubByMapID(safeWaypointMapID)
         local x, y = 50, 50
         local name = "Portal Area"
         
@@ -476,7 +503,7 @@ function TA:SetRouteWaypoints(route, destinationName, destinationMapID)
             name = hub.name or "Portal Area"
         end
         
-        addWP(route.waypointMapID, x, y, name, true)
+        addWP(safeWaypointMapID, x, y, name, true)
     end
     
     if waypointsSet > 0 then
@@ -931,6 +958,10 @@ end
 function TA:GetPortalWaypoint(hubMapID, portalDestMapID)
     local hub = self:GetHubByMapID(hubMapID)
     local portal = self:GetPortalInHub(hubMapID, portalDestMapID)
+
+    if self:IsWaypointUnverified(hubMapID) then
+        return nil
+    end
     
     if self.debugMode then
         print("[TravelAdvisor] GetPortalWaypoint: hubMapID=" .. tostring(hubMapID) .. ", portalDestMapID=" .. tostring(portalDestMapID))
@@ -2504,7 +2535,7 @@ local function AppendReportEdges(lines, graph, mapID)
     end
 end
 
-function TA:BuildTroubleshootingReport(destinationMapID, destinationName)
+function TA:BuildTroubleshootingReport(destinationMapID, destinationName, lookupError)
     local lines = {
         "PROMPT",
         "Troubleshoot this TravelAdvisor route-planning issue using the diagnostic DATA below.",
@@ -2563,6 +2594,10 @@ function TA:BuildTroubleshootingReport(destinationMapID, destinationName)
     end
     lines[#lines + 1] = "target.name=" .. ReportText(destinationName)
     lines[#lines + 1] = "target.mapID=" .. ReportText(destinationMapID)
+    lines[#lines + 1] = "target.lookup=" .. ReportText(lookupError or "ok")
+    if lookupError == "lookup-failed" then
+        lines[#lines + 1] = "target.lookupError=The requested destination could not be resolved to a valid map ID."
+    end
     if destinationMapID and destinationMapID ~= currentMapID then
         AppendReportMap(lines, "target.map", destinationMapID, mapAPI)
     end
@@ -2769,14 +2804,14 @@ local function ResolveTroubleshootingTarget(argument)
     end
 
     local mapID = tonumber(argument) or ZoneNameToMapID(argument)
-    if not mapID then return nil, argument end
+    if not IsValidMapID(mapID) then return nil, argument, "lookup-failed" end
 
     local mapInfo = ReportCall(C_Map and C_Map.GetMapInfo, mapID)
     local name = mapInfo and mapInfo.name
     if not name and TA.TravelGraph and TA.TravelGraph.GetZoneName then
         name = TA.TravelGraph:GetZoneName(mapID)
     end
-    return mapID, name or argument
+    return mapID, name or argument, nil
 end
 
 local function CreateMainFrame()
@@ -2850,7 +2885,14 @@ local function CreateMainFrame()
     destinationFilter:SetMaxLetters(100)
     destinationFilter:SetTextInsets(6, 6, 0, 0)
     destinationFilter:SetScript("OnTextChanged", function()
-        TA:RefreshZoneTree()
+        if TA._destinationFilterRefreshScheduled then return end
+        TA._destinationFilterRefreshScheduled = true
+        C_Timer.After(0.1, function()
+            TA._destinationFilterRefreshScheduled = false
+            if mainFrame and mainFrame.destinationFilter then
+                TA:RefreshZoneTree()
+            end
+        end)
     end)
     destinationFilter:SetScript("OnEscapePressed", function(self)
         self:ClearFocus()
@@ -3251,9 +3293,12 @@ function TA:QueueRouteRefresh(reason)
     self._lastRefreshReason = reason
 
     if IsInCombatLockdown() then
+        self._secureActionButtonsPendingHide = true
         self:SetRefreshStatus("Refresh pending until combat ends")
         return
     end
+
+    self:HideSecureActionButtons()
 
     if self._routeRefreshScheduled then return end
     self._routeRefreshScheduled = true
@@ -3674,6 +3719,13 @@ function TA:GetSecureActionConfig(travel)
     return nil
 end
 
+function TA:IsWaypointUnverified(mapID)
+    mapID = SafeNumber(mapID)
+    if not mapID then return false end
+    local hub = self:GetHubByMapID(mapID)
+    return hub and hub.waypointsUnverified == true or false
+end
+
 function TA:GetTravelActionAvailability(travel)
     if not self.TravelGraph or not self.TravelGraph.GetActionAvailability then
         return nil
@@ -3851,7 +3903,8 @@ function TA:DisplayResults(results, title, destMapID, destName)
     else
         local settings = GetSettings()
         for i, route in ipairs(displayResults) do
-            local hasDesc = SafeString(route.description) ~= nil
+            local description = SafeString(route.description)
+            local hasDesc = description ~= nil and description ~= ""
             local explanationText = settings and settings:Get("showExplanations")
                 and self:BuildRouteExplanationText(route) or ""
             local hasExplanation = explanationText ~= ""
@@ -3962,8 +4015,10 @@ function TA:DisplayResults(results, title, destMapID, destName)
             
             -- Check what buttons we'll need
             local travel = not IsSecretValue(route.travel) and route.travel or nil
-            local hasWaypoint = SafeNumber(route.waypointMapID)
+            local waypointMapID = SafeNumber(route.waypointMapID)
                 or (travel and SafeNumber(travel.mapID))
+            local hasWaypoint = waypointMapID
+                and not self:IsWaypointUnverified(waypointMapID)
             local canUse = self:IsRouteActionable(route)
             
             -- Calculate total button width
@@ -4113,10 +4168,14 @@ function TA:DisplayResults(results, title, destMapID, destName)
                             y = SafeNumber(waypointData.y)
                             name = SafeText(waypointData.name)
                             mapID = SafeNumber(waypointData.mapID)
+                            if mapID and self:IsWaypointUnverified(mapID) then
+                                x, y, name, mapID = nil, nil, nil, nil
+                            end
                         end
                         
                         -- If no waypointData, try to get from hub
-                        if (not x or not y) and waypointMapID and waypointMapID > 0 then
+                        if (not x or not y) and waypointMapID and waypointMapID > 0
+                            and not self:IsWaypointUnverified(waypointMapID) then
                             local hub = TA:GetHubByMapID(waypointMapID)
                             if hub then
                                 x = SafeNumber(hub.x)
@@ -4183,7 +4242,7 @@ function TA:DisplayResults(results, title, destMapID, destName)
                 -- Strip waypoint hyperlinks from description (they don't work in FontStrings)
                 local descriptionParts = {}
                 if hasDesc then
-                    descriptionParts[#descriptionParts + 1] = route.description:gsub(
+                    descriptionParts[#descriptionParts + 1] = description:gsub(
                         "|c%x%x%x%x%x%x%x%x|H[^|]+|h%[([^%]]+)%]|h|r", "%1"
                     )
                 end
@@ -4328,17 +4387,19 @@ SlashCmdList["TRAVELADVISOR"] = function(msg)
         TA:ScanAvailableTravel()
         Print("Found " .. #TA.availableTravel .. " travel options.")
     elseif msg == "report" then
-        local mapID, name = ResolveTroubleshootingTarget()
-        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name), name)
+        local mapID, name, lookupError = ResolveTroubleshootingTarget()
+        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name, lookupError), name)
     elseif msg:sub(1, 7) == "report " then
-        local mapID, name = ResolveTroubleshootingTarget(msg:sub(8))
-        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name), name)
+        local mapID, name, lookupError = ResolveTroubleshootingTarget(msg:sub(8))
+        if lookupError then Print("Unknown destination: " .. (name or "(empty)")) end
+        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name, lookupError), name)
     elseif msg == "troubleshoot" then
-        local mapID, name = ResolveTroubleshootingTarget()
-        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name), name)
+        local mapID, name, lookupError = ResolveTroubleshootingTarget()
+        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name, lookupError), name)
     elseif msg:sub(1, 13) == "troubleshoot " then
-        local mapID, name = ResolveTroubleshootingTarget(msg:sub(14))
-        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name), name)
+        local mapID, name, lookupError = ResolveTroubleshootingTarget(msg:sub(14))
+        if lookupError then Print("Unknown destination: " .. (name or "(empty)")) end
+        TA:ShowTroubleshootingReport(TA:BuildTroubleshootingReport(mapID, name, lookupError), name)
     elseif msg == "debug" then
         TA:ScanAvailableTravel()
         Print("=== Travel Advisor Debug ===")

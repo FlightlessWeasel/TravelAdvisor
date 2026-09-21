@@ -969,7 +969,7 @@ TA.TravelData.PortalHubs = {
     {
         name = "Silvermoon City",
         mapID = 2393,
-        x = 50.0, y = 50.0,
+        waypointsUnverified = true,
         faction = "Both",
         portalsTo = {
             { name = "Harandar", mapID = 2413 },
@@ -979,7 +979,7 @@ TA.TravelData.PortalHubs = {
     {
         name = "Harandar",
         mapID = 2413,
-        x = 50.0, y = 50.0,
+        waypointsUnverified = true,
         faction = "Both",
         portalsTo = {
             { name = "Silvermoon City", mapID = 2393 },
@@ -989,7 +989,7 @@ TA.TravelData.PortalHubs = {
     {
         name = "Voidstorm",
         mapID = 2444,
-        x = 50.0, y = 50.0,
+        waypointsUnverified = true,
         faction = "Both",
         portalsTo = {
             { name = "Silvermoon City", mapID = 2393 },

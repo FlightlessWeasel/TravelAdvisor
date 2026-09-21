@@ -72,4 +72,22 @@ assertContains(graphSource, 'edge.to == mapID',
     'Zone debug must include explicit flight edges when reporting reachable zones.');
 assertContains(advisorSource, 'route.status=calculated-no-route',
     'Troubleshooting reports must distinguish calculated no-route results.');
+for (const hubName of ['Silvermoon City', 'Harandar', 'Voidstorm']) {
+    const hubStart = dataSource.indexOf(`name = "${hubName}",\n        mapID =`);
+    assert.ok(hubStart >= 0, `Midnight hub ${hubName} must be present.`);
+    const hubEnd = dataSource.indexOf('\n    },', hubStart);
+    const hub = dataSource.slice(hubStart, hubEnd >= 0 ? hubEnd : hubStart + 600);
+    assertContains(hub, 'waypointsUnverified = true',
+        `${hubName} must be marked as lacking verified waypoint coordinates.`);
+}
+assertContains(advisorSource, 'function TA:IsWaypointUnverified(mapID)',
+    'Waypoint safety must have one shared unverified-hub predicate.');
+assertContains(advisorSource, 'if self:IsWaypointUnverified(hubMapID) then',
+    'Unverified Midnight hubs must suppress portal waypoint creation.');
+assertContains(advisorSource, 'not self:IsWaypointUnverified(waypointMapID)',
+    'Unverified Midnight hubs must suppress route waypoint buttons and native fallback pins.');
+assertContains(advisorSource, 'if not mapID or self:IsWaypointUnverified(mapID) then return nil end',
+    'TomTom waypoint creation must reject unverified hub map IDs.');
+assertContains(advisorSource, 'not self:IsWaypointUnverified(safeDestinationMapID)',
+    'Destination waypoint fallback must reject unverified Midnight hubs.');
 console.log('Midnight catalog regression: PASS');

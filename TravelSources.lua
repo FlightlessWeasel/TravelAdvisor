@@ -198,7 +198,7 @@ end
 
 local function safeString(value)
     if value == nil or isSecretValue(value) or type(value) ~= "string" then return nil end
-    return value
+    return value ~= "" and value or nil
 end
 
 local function safeDisplayValue(value)
@@ -1453,7 +1453,7 @@ local function actionLookupKey(action)
 end
 
 local function usability(action, state)
-    local key = actionLookupKey and actionLookupKey(action)
+    local key = actionLookupKey(action)
     if state and state.usable and key and state.usable[key] ~= nil then
         local value = safeBoolean(state.usable[key])
         if value == nil then return true, false end
@@ -1812,9 +1812,9 @@ function Sources.Evaluate(source, state, options)
         elseif source.kind == "hearthstone" and action.id == 6948 and (count == nil or count == 0) then
             result.owned = true
             result.quantity = math.max(result.quantity, 1)
-            elseif count == nil then
-                result.owned = nil
-                if not reason then reason = REASONS.API_UNAVAILABLE end
+        elseif count == nil then
+            result.owned = nil
+            if not reason then reason = REASONS.API_UNAVAILABLE end
         else
             result.owned = count > 0
             if not reason and result.requiredQuantity > 0 and count < result.requiredQuantity then

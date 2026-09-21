@@ -15,6 +15,7 @@ const checks = [
     ['Phase 7 contract tests', path.join(__dirname, 'phase7.test.js')],
     ['Secret-value safety regression', path.join(__dirname, 'secret-safety.test.js')],
     ['Taint-safety regression', path.join(__dirname, 'taint-safety.test.js')],
+    ['Post-travel flight regression', path.join(__dirname, 'post-travel-flight.test.js')],
     ['Midnight route regression', path.join(__dirname, 'midnight.test.js')],
     ['Travel-data validator', path.join(__dirname, 'validate.js')],
 ];

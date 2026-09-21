@@ -23,7 +23,10 @@ local Graph = TA.TravelGraph
 local function IsSecretValue(value)
     if value == nil then return false end
     local source = TA.TravelSources and TA.TravelSources.IsSecretValue
-    if type(source) == "function" then return source(value) end
+    if type(source) == "function" then
+        local ok, secret = pcall(source, value)
+        if ok then return secret == true end
+    end
     local checker = _G.issecretvalue
     if type(checker) ~= "function" then return false end
     local ok, secret = pcall(checker, value)
@@ -31,6 +34,11 @@ local function IsSecretValue(value)
 end
 
 local function SafeNumber(value, fallback)
+    local source = TA.TravelSources and TA.TravelSources.SafeNumber
+    if type(source) == "function" then
+        local ok, number = pcall(source, value)
+        if ok then return number ~= nil and number or fallback end
+    end
     if value == nil or IsSecretValue(value) then return fallback end
     local ok, number = pcall(tonumber, value)
     if not ok or number == nil or IsSecretValue(number) or type(number) ~= "number" then
@@ -40,13 +48,23 @@ local function SafeNumber(value, fallback)
 end
 
 local function SafeBoolean(value)
+    local source = TA.TravelSources and TA.TravelSources.SafeBoolean
+    if type(source) == "function" then
+        local ok, result = pcall(source, value)
+        if ok then return result end
+    end
     if value == nil or IsSecretValue(value) then return nil end
     return value == true
 end
 
 local function SafeString(value, fallback)
+    local source = TA.TravelSources and TA.TravelSources.SafeString
+    if type(source) == "function" then
+        local ok, result = pcall(source, value)
+        if ok then return result ~= nil and result or fallback end
+    end
     if value == nil or IsSecretValue(value) or type(value) ~= "string" then return fallback end
-    return value
+    return value ~= "" and value or fallback
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
