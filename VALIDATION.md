@@ -133,12 +133,16 @@ The validator currently checks:
 ## Phase 4 implementation checks
 
 Phase 4 makes graph topology explicit. `TravelGraph.lua` consumes typed
-`TravelData.ZoneConnections` and portal-hub transitions, removes the old
-destination-only same-continent flight shortcut, and carries mode, timing,
-confidence, requirements, interaction, and region/landing/instance identity
-metadata on every route step. Static edges use the canonical requirement
-evaluator where available; node access and unsupported parent/instance map
-contexts are checked separately.
+`TravelData.ZoneConnections` and portal-hub transitions, keeps the player's
+current node on explicit topology, and adds a target-directed approximate
+flight fallback only after a route has reached an intermediate node. This lets
+teleports, portals, and class travel compose with a final movement leg without
+inventing an all-pairs same-continent graph. The fallback is conditional and
+informational until flight access is discovered. Every route step carries mode,
+timing, confidence, requirements, interaction, and region/landing/instance
+identity metadata. Static edges use the canonical requirement evaluator where
+available; node access and unsupported parent/instance map contexts are checked
+separately.
 
 The route policies are explicit and named: `Best Now`, `Best If Ready`, `Best
 After Wait`, fewest transitions, fewest interactions, and closest useful
@@ -149,8 +153,9 @@ button.
 Static checks:
 
 - `node tools/phase4.test.js` covers explicit multi-hop topology, no invented
-  same-continent edges, mode/access metadata, cooldown policy ranking, dungeon
-  identity fields, unsupported maps, and cache dimensions.
+  same-continent edges from the current node, post-travel final-flight
+  composition, mode/access metadata, cooldown policy ranking, dungeon identity
+  fields, unsupported maps, and cache dimensions.
 - `node tools/phase0.test.js`, `node tools/phase1.test.js`,
   `node tools/phase2.test.js`, and `node tools/phase3.test.js` remain passing.
 - `node tools/check.js` includes the Phase 4 contract test before running the

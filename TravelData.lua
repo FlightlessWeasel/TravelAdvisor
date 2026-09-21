@@ -18,7 +18,12 @@ TA.Zones = {
     DARNASSUS = 89,
     UNDERCITY = 90,
     EXODAR = 103,
-    SILVERMOON = 110,
+    SILVERMOON = 110, -- Legacy Silvermoon map
+    SILVERMOON_MIDNIGHT = 2393,
+    EVERSONG_WOODS_MIDNIGHT = 2395,
+    ZULAMAN_MIDNIGHT = 2437,
+    HARANDAR = 2413,
+    VOIDSTORM = 2444,
     SHATTRATH = 111,
     DALARAN_NORTHREND = 125,
     DALARAN_BROKEN_ISLES = 627,
@@ -778,6 +783,13 @@ TA.TravelData.ZoneConnections = {
             confidence = "low", approximate = true },
     },
 
+    -- Midnight: Silvermoon has a direct flight connection to Zul'Aman.
+    -- Keep access conditional until the live flight/discovery state is exposed.
+    [2393] = {
+        { to = 2437, type = "flight", mode = "flight", cost = 180, bidirectional = true,
+            confidence = "low", approximate = true },
+    },
+
     -- Dragon Isles, Shadowlands, and older expansion hubs retain explicit
     -- region transitions.  Portal edges still model the cross-expansion hop.
     [2112] = {
@@ -829,6 +841,36 @@ TA.TravelData.MapIdentity = {
     [1670] = { kind = "hub", regionMapID = 1670, services = { "portal-room", "flightpath" } },
     [2112] = { kind = "hub", regionMapID = 2112, services = { "portal-room", "flightpath" } },
     [2339] = { kind = "hub", regionMapID = 2339, services = { "portal-room", "flightpath" } },
+    -- Midnight map identities are catalog nodes, not topology.  In
+    -- particular, Silvermoon City is a real child map of the Midnight
+    -- Eversong Woods map; it must not alias the legacy Silvermoon map.
+    [2393] = {
+        kind = "hub",
+        name = "Silvermoon City (Midnight)",
+        regionMapID = 2393,
+        parentMapID = 2395,
+    },
+    [2395] = {
+        kind = "region",
+        name = "Eversong Woods (Midnight)",
+        regionMapID = 2395,
+    },
+    [2437] = {
+        kind = "region",
+        name = "Zul'Aman (Midnight)",
+        regionMapID = 2437,
+    },
+    [2413] = {
+        kind = "region",
+        name = "Harandar (Midnight)",
+        regionMapID = 2413,
+    },
+    [2444] = {
+        kind = "region",
+        name = "Voidstorm (Midnight)",
+        regionMapID = 2444,
+    },
+    [48] = { kind = "region", name = "Loch Modan", regionMapID = 48, continentID = 13 },
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -919,6 +961,39 @@ TA.TravelData.PortalHubs = {
             { name = "Caverns of Time", mapID = 71, inst = 1, wx = -4487.40, wy = 1413.40, x = 55.5, y = 11.2 },
             -- Classic cities (different area)
             { name = "Undercity", mapID = 90, inst = 1, wx = -4388.6, wy = 1842.2, x = 50.8, y = 35.5 },
+        }
+    },
+
+    -- Midnight portal network. These are explicit portal-room transitions;
+    -- access remains informational until the live client exposes availability.
+    {
+        name = "Silvermoon City",
+        mapID = 2393,
+        x = 50.0, y = 50.0,
+        faction = "Both",
+        portalsTo = {
+            { name = "Harandar", mapID = 2413 },
+            { name = "Voidstorm", mapID = 2444 },
+        }
+    },
+    {
+        name = "Harandar",
+        mapID = 2413,
+        x = 50.0, y = 50.0,
+        faction = "Both",
+        portalsTo = {
+            { name = "Silvermoon City", mapID = 2393 },
+            { name = "Voidstorm", mapID = 2444 },
+        }
+    },
+    {
+        name = "Voidstorm",
+        mapID = 2444,
+        x = 50.0, y = 50.0,
+        faction = "Both",
+        portalsTo = {
+            { name = "Silvermoon City", mapID = 2393 },
+            { name = "Harandar", mapID = 2413 },
         }
     },
 
@@ -1703,7 +1778,8 @@ TA.TravelData.ZoneCoordinates = {
     [241] = { x = 70, y = 30, continent = 13 },  -- Twilight Highlands
     [36] = { x = 55, y = 40, continent = 13 },   -- Burning Steppes
     [32] = { x = 50, y = 50, continent = 13 },   -- Searing Gorge
-    [26] = { x = 45, y = 50, continent = 13 },   -- Loch Modan
+    [26] = { x = 45, y = 50, continent = 13 },   -- The Hinterlands (legacy approximate coordinate)
+    [48] = { x = 45, y = 50, continent = 13 },   -- Loch Modan
     [27] = { x = 50, y = 55, continent = 13 },   -- Dun Morogh
     [49] = { x = 40, y = 40, continent = 13 },   -- Western Plaguelands
     [50] = { x = 50, y = 35, continent = 13 },   -- Eastern Plaguelands
@@ -1833,6 +1909,14 @@ TA.TravelData.ZoneCoordinates = {
     [830] = { x = 40, y = 60, continent = 905 },   -- Krokuun
     [885] = { x = 60, y = 40, continent = 905 },   -- Antoran Wastes
     
+    -- Midnight overworld maps. Keep fallback continent groups isolated;
+    -- confirmed transport links are represented explicitly above.
+    [2393] = { x = 50, y = 50, continent = 2395 }, -- Silvermoon City (Midnight)
+    [2395] = { x = 50, y = 50, continent = 2395 }, -- Eversong Woods (Midnight)
+    [2437] = { x = 50, y = 50, continent = 2437 }, -- Zul'Aman (Midnight)
+    [2413] = { x = 50, y = 50, continent = 2413 }, -- Harandar (Midnight)
+    [2444] = { x = 50, y = 50, continent = 2444 }, -- Voidstorm (Midnight)
+
     -- Midnight (Season 3 zones)
     [2501] = { x = 50, y = 50, continent = 2501 }, -- Mechagon City (Midnight)
     [2556] = { x = 50, y = 50, continent = 2556 }, -- Nightfall Priory
@@ -1863,8 +1947,14 @@ TA.TravelData.ZoneNameToID = {
     ["undercity"] = 90,
     ["uc"] = 90,
     ["exodar"] = 103,
-    ["silvermoon"] = 110,
-    ["silvermoon city"] = 110,
+    ["silvermoon"] = 2393,
+    ["silvermoon city"] = 2393,
+    ["silvermoon city (midnight)"] = 2393,
+    ["midnight silvermoon city"] = 2393,
+    ["silvermoon (legacy)"] = 110,
+    ["silvermoon city (legacy)"] = 110,
+    ["legacy silvermoon city"] = 110,
+    ["silvermoon city (burning crusade)"] = 110,
     ["shattrath"] = 111,
     ["dalaran"] = 627,
     ["dalaran northrend"] = 125,
@@ -1913,6 +2003,24 @@ TA.TravelData.ZoneNameToID = {
     ["zaralek cavern"] = 2133,
     ["emerald dream"] = 2200,
     ["forbidden reach"] = 2151,
+    ["loch modan"] = 48,
+
+    -- Midnight overworld zones.  Generic names use the current expansion;
+    -- qualified names make the catalog choice explicit.
+    ["eversong woods"] = 2395,
+    ["eversong woods (midnight)"] = 2395,
+    ["midnight eversong woods"] = 2395,
+    ["eversong woods (legacy)"] = 21,
+    ["legacy eversong woods"] = 21,
+    ["zul'aman"] = 2437,
+    ["zul'aman (midnight)"] = 2437,
+    ["midnight zul'aman"] = 2437,
+    ["harandar"] = 2413,
+    ["harandar (midnight)"] = 2413,
+    ["midnight harandar"] = 2413,
+    ["voidstorm"] = 2444,
+    ["voidstorm (midnight)"] = 2444,
+    ["midnight voidstorm"] = 2444,
     
     -- Khaz Algar zones (TWW)
     ["isle of dorn"] = 2248,
@@ -1970,6 +2078,22 @@ TA.TravelData.ZoneNameToID = {
 -- HIERARCHICAL ZONE BROWSER (for UI tree view)
 -- ═══════════════════════════════════════════════════════════════════════════
 TA.TravelData.ZoneTree = {
+    {
+        name = "Midnight",
+        icon = "Interface\\Icons\\Inv_misc_map_01",
+        children = {
+            {
+                name = "Eversong Woods (Midnight)",
+                mapID = 2395,
+                children = {
+                    { name = "Silvermoon City (Midnight)", mapID = 2393, isCity = true },
+                },
+            },
+            { name = "Zul'Aman (Midnight)", mapID = 2437 },
+            { name = "Harandar (Midnight)", mapID = 2413 },
+            { name = "Voidstorm (Midnight)", mapID = 2444 },
+        },
+    },
     {
         name = "The War Within",
         icon = "Interface\\Icons\\Inv_misc_head_nerubian_01",
@@ -2147,7 +2271,7 @@ TA.TravelData.ZoneTree = {
                 { name = "Stormwind", mapID = 84, isCity = true, faction = "Alliance" },
                 { name = "Ironforge", mapID = 87, isCity = true, faction = "Alliance" },
                 { name = "Undercity", mapID = 90, isCity = true, faction = "Horde" },
-                { name = "Silvermoon City", mapID = 110, isCity = true, faction = "Horde" },
+                { name = "Silvermoon City (Legacy)", mapID = 110, isCity = true, faction = "Horde" },
             }},
             { name = "Northern EK", children = {
                 { name = "Tirisfal Glades", mapID = 18 },

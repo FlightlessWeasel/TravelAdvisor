@@ -20,6 +20,35 @@ TA.TravelGraph = {
 
 local Graph = TA.TravelGraph
 
+local function IsSecretValue(value)
+    if value == nil then return false end
+    local source = TA.TravelSources and TA.TravelSources.IsSecretValue
+    if type(source) == "function" then return source(value) end
+    local checker = _G.issecretvalue
+    if type(checker) ~= "function" then return false end
+    local ok, secret = pcall(checker, value)
+    return ok and secret == true
+end
+
+local function SafeNumber(value, fallback)
+    if value == nil or IsSecretValue(value) then return fallback end
+    local ok, number = pcall(tonumber, value)
+    if not ok or number == nil or IsSecretValue(number) or type(number) ~= "number" then
+        return fallback
+    end
+    return number
+end
+
+local function SafeBoolean(value)
+    if value == nil or IsSecretValue(value) then return nil end
+    return value == true
+end
+
+local function SafeString(value, fallback)
+    if value == nil or IsSecretValue(value) or type(value) ~= "string" then return fallback end
+    return value
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CONSTANTS
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -100,13 +129,15 @@ function Graph:IsZoneUnlocked(mapID)
     
     -- Check if the unlock quest is completed
     if req.quest and C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
-        return C_QuestLog.IsQuestFlaggedCompleted(req.quest)
+        local ok, value = pcall(C_QuestLog.IsQuestFlaggedCompleted, req.quest)
+        local result = ok and SafeBoolean(value)
+        if result ~= nil then return result end
     end
     
     -- Fallback: check if player has explored any of the zone
     if C_MapExplorationInfo and C_MapExplorationInfo.GetExploredMapTextures then
-        local explored = C_MapExplorationInfo.GetExploredMapTextures(mapID)
-        if explored and #explored > 0 then
+        local ok, explored = pcall(C_MapExplorationInfo.GetExploredMapTextures, mapID)
+        if ok and explored and not IsSecretValue(explored) and #explored > 0 then
             return true
         end
     end
@@ -220,7 +251,8 @@ function Graph:ClearDynamicNodes()
 end
 
 function Graph:IsValidMapID(mapID)
-    return type(mapID) == "number" and mapID > 0
+    mapID = SafeNumber(mapID)
+    return mapID ~= nil and mapID > 0
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -228,7 +260,9 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 function Graph:AddEdge(edgeData)
-    if type(edgeData) ~= "table" or not edgeData.from or not edgeData.to then return end
+    if type(edgeData) ~= "table" or IsSecretValue(edgeData)
+        or IsSecretValue(edgeData.from) or IsSecretValue(edgeData.to)
+        or not edgeData.from or not edgeData.to then return end
     if edgeData.to ~= Graph.PLAYER_NODE and not self:IsValidMapID(edgeData.to) then
         return
     end
@@ -410,7 +444,7 @@ local function timingCost(timing)
     if type(timing) ~= "table" then return 0 end
     local total = 0
     for _, field in ipairs({ "cast", "wait", "interaction", "travel" }) do
-        local value = tonumber(timing[field])
+        local value = SafeNumber(timing[field])
         if value and value > 0 then total = total + value end
     end
     return total
@@ -430,7 +464,7 @@ function Graph:CalculateEdgeCost(edge, fromMapID, options)
         return count + 0.001
     end
 
-    local cost = tonumber(edge.cost)
+    local cost = SafeNumber(edge.cost)
     if cost == nil then
         cost = timingCost(edge.timing)
     end
@@ -447,8 +481,8 @@ function Graph:CalculateEdgeCost(edge, fromMapID, options)
         end
     end
 
-    if options.includeWait and edge.actionableNow == false then
-        cost = cost + math.max(0, tonumber(edge.cooldown) or 0)
+    if options.includeWait and SafeBoolean(edge.actionableNow) == false then
+        cost = cost + math.max(0, SafeNumber(edge.cooldown, 0))
     end
     return cost
 end
@@ -529,8 +563,8 @@ end
 
 function Graph:CheckEdgeAccess(edge, playerFaction, onlyReady, checkUnlock, options)
     options = options or {}
-    if edge.destinationResolved == false then return false, "destination-unresolved" end
-    if edge.routeEligible == false then return false, edge.reason or "unsupported-source" end
+    if SafeBoolean(edge.destinationResolved) == false then return false, "destination-unresolved" end
+    if SafeBoolean(edge.routeEligible) == false then return false, edge.reason or "unsupported-source" end
     if options.requireExecutable and edge.executable ~= true then
         return false, edge.reason or "informational-only"
     end
@@ -554,7 +588,7 @@ function Graph:CheckEdgeAccess(edge, playerFaction, onlyReady, checkUnlock, opti
         return false, edge.reason or "access-unknown"
     end
 
-    if onlyReady and edge.actionableNow == false then
+    if onlyReady and SafeBoolean(edge.actionableNow) == false then
         return false, edge.reason or "not-ready"
     end
 
@@ -603,6 +637,43 @@ function Graph:CanFlyBetween(fromMapID, toMapID)
     return true
 end
 
+-- Build a conservative final movement leg after the path has already left the
+-- player's current routing node.  This keeps teleport and portal sources
+-- composable without restoring the old direct-flight shortcut from the
+-- player's current location.  The edge is informational until discovered
+-- flight access can be verified by the client.
+function Graph:BuildPostTravelFlightEdge(fromMapID, toMapID, startNodeID)
+    if not self:IsValidMapID(fromMapID) or not self:IsValidMapID(toMapID) then
+        return nil
+    end
+    if fromMapID == toMapID or fromMapID == startNodeID then return nil end
+    if not self:CanFlyBetween(fromMapID, toMapID) then return nil end
+
+    local targetNode = self:GetNode(toMapID)
+    return {
+        from = fromMapID,
+        to = toMapID,
+        type = Graph.EdgeType.FLIGHT,
+        mode = Graph.EdgeType.FLIGHT,
+        name = "Fly to " .. self:GetZoneName(toMapID),
+        cost = Graph.DEFAULT_FLIGHT_COST,
+        estimated = true,
+        approximate = true,
+        confidence = "low",
+        actionableNow = false,
+        executable = false,
+        routeEligible = true,
+        destinationResolved = true,
+        access = "conditional",
+        accessState = "unknown",
+        requiresDiscovery = true,
+        reason = "access-unknown",
+        interaction = "player",
+        sourceType = "post-travel-flight",
+        targetKind = targetNode and (targetNode.targetKind or targetNode.kind) or "region",
+    }
+end
+
 local function safeGraphCall(fn, ...)
     if type(fn) ~= "function" then return false end
     local ok, a, b, c = pcall(fn, ...)
@@ -614,6 +685,8 @@ end
 -- normal region.  The route planner may use a known parent/landing region as
 -- a conservative fallback, while retaining the requested map in the result.
 function Graph:GetMapContext(mapID)
+    local TD = TA.TravelData or {}
+    local identity = TD.MapIdentity and TD.MapIdentity[mapID]
     local context = {
         mapID = mapID,
         routeMapID = self:HasNode(mapID) and mapID or nil,
@@ -626,28 +699,32 @@ function Graph:GetMapContext(mapID)
     }
     if not self:IsValidMapID(mapID) then return context end
 
-    local TD = TA.TravelData or {}
-    local identity = TD.MapIdentity and TD.MapIdentity[mapID]
     if identity then
         context.parentMapID = identity.parentMapID
         context.continentID = identity.continentID
         context.mapType = identity.mapType
         context.isInstance = identity.isInstance == true
         context.isPhased = identity.isPhased == true
+        context.approximate = identity.approximate == true
         if not context.routeMapID then
-            context.routeMapID = identity.landingMapID or identity.regionMapID
+            context.routeMapID = identity.routeMapID
+                or identity.landingMapID
+                or identity.regionMapID
         end
     end
 
     local mapAPI = _G.C_Map
     if mapAPI and type(mapAPI.GetMapInfo) == "function" then
         local ok, info = safeGraphCall(mapAPI.GetMapInfo, mapID)
-        if ok and type(info) == "table" then
-            context.parentMapID = context.parentMapID or info.parentMapID
-            context.continentID = context.continentID or info.continentID
-            context.mapType = context.mapType or info.mapType
-            context.isInstance = context.isInstance or info.isInstance == true or info.mapType == 3
-            context.isPhased = context.isPhased or info.isPhased == true
+        if ok and type(info) == "table" and not IsSecretValue(info) then
+            local parentMapID = SafeNumber(info.parentMapID)
+            local continentID = SafeNumber(info.continentID)
+            local mapType = SafeNumber(info.mapType)
+            context.parentMapID = context.parentMapID or parentMapID
+            context.continentID = context.continentID or continentID
+            context.mapType = context.mapType or mapType
+            context.isInstance = context.isInstance or SafeBoolean(info.isInstance) == true or mapType == 3
+            context.isPhased = context.isPhased or SafeBoolean(info.isPhased) == true
         end
     end
 
@@ -663,7 +740,7 @@ function Graph:GetMapContext(mapID)
         local parentInfo
         if mapAPI and type(mapAPI.GetMapInfo) == "function" then
             local ok, info = safeGraphCall(mapAPI.GetMapInfo, candidate)
-            if ok then parentInfo = info end
+            if ok and type(info) == "table" and not IsSecretValue(info) then parentInfo = info end
         end
         candidate = parentInfo and parentInfo.parentMapID
     end
@@ -681,11 +758,25 @@ function Graph:ResolveRoutingMap(mapID)
     return nil, context
 end
 
+-- A shared routing node is only an exact same-location result when the raw
+-- requested maps match or both contexts were resolved without approximation.
+-- Parent fallback is useful for routing, but it must never claim two distinct
+-- unsupported child maps are the same destination.
+function Graph:IsExactRoutingMatch(currentMapID, destinationMapID, currentContext, destinationContext)
+    if currentMapID == destinationMapID then return true end
+    return currentContext ~= nil
+        and destinationContext ~= nil
+        and currentContext.approximate ~= true
+        and destinationContext.approximate ~= true
+end
+
 local function tableFingerprint(value)
+    if IsSecretValue(value) then return "<secret>" end
     if type(value) ~= "table" then return tostring(value or "?") end
     local entries = {}
     for key, child in pairs(value) do
-        if type(child) ~= "table" and type(child) ~= "function" then
+        if not IsSecretValue(key) and not IsSecretValue(child)
+            and type(child) ~= "table" and type(child) ~= "function" then
             entries[#entries + 1] = tostring(key) .. "=" .. tostring(child)
         end
     end
@@ -715,7 +806,7 @@ function Graph:GetSourceStateFingerprint()
         local destination = sourceState.destination or {}
         parts[#parts + 1] = table.concat({
             tostring(sourceState.sourceKey),
-            tostring(sourceState.cooldown or 0),
+            tostring(SafeNumber(sourceState.cooldown, 0)),
             tostring(sourceState.reason),
             tostring(destination.mapID),
             tostring(sourceState.actionableNow),
@@ -900,7 +991,9 @@ function Graph:FindPath(fromMapID, toMapID, options)
         return noPath("zone-not-unlocked", targetContext)
     end
 
-    if startNode == targetNode then
+    if startNode == targetNode and self:IsExactRoutingMatch(
+        startRequestedMapID, toMapID, startContext, targetContext
+    ) then
         return {
             found = true,
             path = {},
@@ -920,6 +1013,13 @@ function Graph:FindPath(fromMapID, toMapID, options)
             currentContext = startContext,
             destinationContext = targetContext,
         }
+    end
+
+    if startNode == targetNode then
+        return noPath("unsupported-map", {
+            current = startContext,
+            destination = targetContext,
+        })
     end
 
     local dist = self._dist or {}
@@ -966,7 +1066,8 @@ function Graph:FindPath(fromMapID, toMapID, options)
             visited[currentNode] = true
             if currentNode == targetNode then break end
 
-            for _, edge in ipairs(self:GetEdgesFrom(currentNode)) do
+            local edges = self:GetEdgesFrom(currentNode)
+            for _, edge in ipairs(edges) do
                 local allowed, reason = self:CheckEdgeAccess(
                     edge, playerFaction, onlyReady, checkUnlock, options
                 )
@@ -981,6 +1082,32 @@ function Graph:FindPath(fromMapID, toMapID, options)
                     end
                 else
                     noteExclusion(edge, reason)
+                end
+            end
+
+            -- Once a route has reached an intermediate region or hub, allow a
+            -- conservative final flight to the requested destination.  This
+            -- composes every resolved player/portal source with movement while
+            -- keeping the current location itself on explicit topology only.
+            if currentNode ~= Graph.PLAYER_NODE then
+                local fallback = self:BuildPostTravelFlightEdge(
+                    currentNode, targetNode, startNode
+                )
+                if fallback then
+                    local allowed, reason = self:CheckEdgeAccess(
+                        fallback, playerFaction, onlyReady, checkUnlock, options
+                    )
+                    if allowed then
+                        local edgeCost = self:CalculateEdgeCost(fallback, currentNode, options)
+                        local newDist = currentDist + edgeCost
+                        if not dist[targetNode] or newDist < dist[targetNode] then
+                            dist[targetNode] = newDist
+                            prev[targetNode] = { node = currentNode, edge = fallback }
+                            pq:push(targetNode, newDist)
+                        end
+                    else
+                        noteExclusion(fallback, reason)
+                    end
                 end
             end
         end
@@ -1034,11 +1161,12 @@ function Graph:FindPath(fromMapID, toMapID, options)
             objective = nil,
             includeWait = false,
         })
-        if edge.cooldown and edge.cooldown > 0 then
-            maxCooldown = math.max(maxCooldown, edge.cooldown)
-            if edge.actionableNow == false then waitTime = waitTime + edge.cooldown end
+        local edgeCooldown = SafeNumber(edge.cooldown, 0)
+        if edgeCooldown > 0 then
+            maxCooldown = math.max(maxCooldown, edgeCooldown)
+            if SafeBoolean(edge.actionableNow) == false then waitTime = waitTime + edgeCooldown end
         end
-        if edge.actionableNow == false then
+        if SafeBoolean(edge.actionableNow) == false then
             actionableNow = false
             readyNow = false
             routeReason = routeReason or edge.reason
@@ -1047,17 +1175,17 @@ function Graph:FindPath(fromMapID, toMapID, options)
             routeReasonText = routeReasonText or edge.reasonText
                 or (edge.sourceState and edge.sourceState.reasonText)
         end
-        if edge.routeEligible == false or edge.destinationResolved == false then
+        if SafeBoolean(edge.routeEligible) == false or SafeBoolean(edge.destinationResolved) == false then
             executableNow = false
             readyNow = false
             routeReason = routeReason or edge.reason or "route-unavailable"
             routeReasonText = routeReasonText or edge.reasonText
                 or (edge.sourceState and edge.sourceState.reasonText)
         end
-        if edge.actionableNow == false or edge.externalInteraction == true then
+        if SafeBoolean(edge.actionableNow) == false or SafeBoolean(edge.externalInteraction) == true then
             executableNow = false
         end
-        if edge.cooldown and edge.cooldown > 0 then
+        if edgeCooldown > 0 then
             readyNow = false
         end
         if edge.charges and not routeCharges then
@@ -1137,12 +1265,12 @@ function Graph:BuildRouteExplanation(pathResult, destinationName)
     local explanation = {
         policy = pathResult.policy,
         policyLabel = routePolicyLabel(pathResult.policy),
-        destinationName = destinationName
-            or (pathResult.destinationContext and pathResult.destinationContext.name),
+            destinationName = SafeString(destinationName)
+                or (pathResult.destinationContext and SafeString(pathResult.destinationContext.name)),
         destinationResolved = pathResult.destinationContext == nil
             or pathResult.destinationContext.routeMapID ~= nil,
-        waitTime = math.max(0, tonumber(pathResult.waitTime) or 0),
-        cooldown = math.max(0, tonumber(pathResult.cooldown) or 0),
+        waitTime = math.max(0, SafeNumber(pathResult.waitTime, 0)),
+        cooldown = math.max(0, SafeNumber(pathResult.cooldown, 0)),
         reasons = {},
         sources = {},
         steps = {},
@@ -1158,23 +1286,25 @@ function Graph:BuildRouteExplanation(pathResult, destinationName)
         elseif sourceState then
             sourceExplanation = {
                 sourceType = edge.sourceType,
-                sourceName = sourceState.displayName or edge.name,
+                sourceName = SafeString(sourceState.displayName) or SafeString(edge.name),
                 sourceKey = sourceState.sourceKey or edge.sourceKey,
                 actionType = sourceState.actionType or edge.actionType,
                 actionID = sourceState.actionID or edge.actionID,
-                destinationName = edge.destination and edge.destination.displayName,
-                destinationResolved = edge.destinationResolved ~= false,
+                destinationName = edge.destination
+                    and (SafeString(edge.destination.displayName) or SafeString(edge.destination.name)),
+                destinationResolved = SafeBoolean(edge.destinationResolved) == true,
                 reason = sourceState.reason or edge.reason,
                 reasonText = sourceState.reasonText or edge.reasonText,
                 cooldown = edge.cooldown or 0,
                 charges = sourceState.charges or edge.charges,
                 interaction = sourceState.interactionRequired or sourceState.interaction,
-                actionableNow = sourceState.actionableNow == true,
+                actionableNow = SafeBoolean(sourceState.actionableNow) == true,
             }
         end
         if sourceExplanation then
             local sourceKey = sourceExplanation.sourceKey
-                or (tostring(sourceExplanation.actionType) .. ":" .. tostring(sourceExplanation.actionID))
+                or (tostring(sourceExplanation.actionType or "unknown") .. ":"
+                    .. tostring(sourceExplanation.actionID or "unknown"))
             if not seenSources[sourceKey] then
                 seenSources[sourceKey] = true
                 explanation.sources[#explanation.sources + 1] = sourceExplanation
@@ -1198,12 +1328,13 @@ function Graph:BuildRouteExplanation(pathResult, destinationName)
         explanation.steps[#explanation.steps + 1] = {
             index = index,
             source = sourceExplanation,
-            destinationName = destination and (destination.displayName or destination.name),
-            destinationResolved = edge.destinationResolved ~= false
-                and (not destination or destination.resolved ~= false),
+            destinationName = destination
+                and (SafeString(destination.displayName) or SafeString(destination.name)),
+            destinationResolved = SafeBoolean(edge.destinationResolved) == true
+                and (not destination or SafeBoolean(destination.resolved) ~= false),
             destinationUncertain = edge.destinationUncertain == true
                 or (destination and destination.dynamic == true),
-            actionableNow = edge.actionableNow ~= false,
+            actionableNow = SafeBoolean(edge.actionableNow) == true,
             reason = reason,
             reasonText = reasonText,
         }
@@ -1396,7 +1527,7 @@ function Graph:FormatPath(pathResult)
     
     local stepDetails = {}
     local function durationString(seconds)
-        local value = math.max(0, math.floor(tonumber(seconds) or 0))
+        local value = math.max(0, math.floor(SafeNumber(seconds, 0)))
         local mins = math.floor(value / 60)
         local secs = value % 60
         if mins > 0 then return string.format("~%dm %ds", mins, secs) end
@@ -1458,7 +1589,7 @@ function Graph:FormatPath(pathResult)
             estimated = edge.estimated ~= false,
             approximate = edge.approximate == true,
             confidence = confidence,
-            actionableNow = edge.actionableNow ~= false,
+            actionableNow = SafeBoolean(edge.actionableNow) == true,
             access = edge.access,
             accessState = edge.accessState,
             requiresDiscovery = edge.requiresDiscovery,
@@ -1560,10 +1691,22 @@ function Graph:BuildFromTravelData()
         for key, value in pairs(base or {}) do result[key] = value end
         for _, key in ipairs({
             "faction", "class", "race", "specialization", "profession", "quest",
-            "reputation", "expansion", "location", "unlock", "discovery", "phase",
+            "reputation", "expansion", "unlock", "discovery", "phase",
         }) do
             if record and record[key] ~= nil then result[key] = record[key] end
             if result[key] == nil and fallback and fallback[key] ~= nil then result[key] = fallback[key] end
+        end
+        -- Static-edge `location` is provenance such as "hub-map-key" or
+        -- "source-map-key", not a player-location requirement.  A real
+        -- location restriction must be declared in `requirements.location`
+        -- (or explicitly as `locationID`) so metadata cannot make every
+        -- portal unusable outside a literal marker string.
+        if result.location == nil then
+            if record and record.locationID ~= nil then
+                result.location = record.locationID
+            elseif fallback and fallback.locationID ~= nil then
+                result.location = fallback.locationID
+            end
         end
         return result
     end
@@ -1608,16 +1751,18 @@ function Graph:BuildFromTravelData()
     -- even when no coordinate estimate is available.
     if TD.MapIdentity then
         for mapID, identity in pairs(TD.MapIdentity) do
-            addDataNode(mapID, {
-                name = identity.name,
-                continent = identity.continent,
-                x = identity.x,
-                y = identity.y,
-                kind = identity.kind,
-                targetKind = identity.targetKind,
-                isHub = identity.kind == "hub",
-                isPortalOnly = identity.portalOnly == true,
-            })
+            if not identity.alias then
+                addDataNode(mapID, {
+                    name = identity.name,
+                    continent = identity.continent or identity.continentID,
+                    x = identity.x,
+                    y = identity.y,
+                    kind = identity.kind,
+                    targetKind = identity.targetKind,
+                    isHub = identity.kind == "hub",
+                    isPortalOnly = identity.portalOnly == true,
+                })
+            end
         end
     end
     if TD.ZoneNameToID then
@@ -1857,8 +2002,8 @@ function Graph:GetZoneName(mapID)
     local mapAPI = _G.C_Map
     if mapAPI and type(mapAPI.GetMapInfo) == "function" then
         local ok, mapInfo = safeGraphCall(mapAPI.GetMapInfo, mapID)
-        if ok and mapInfo then
-            return mapInfo.name
+        if ok and type(mapInfo) == "table" and not IsSecretValue(mapInfo) then
+            return SafeString(mapInfo.name)
         end
     end
     
@@ -1988,11 +2133,11 @@ function Graph:ScanCanonicalPlayerSources()
     if not TA.TravelSources then return {} end
 
     self:ClearPlayerEdges()
-    local playerState = TA.TravelSources:CreatePlayerState()
+    local playerState = TA.TravelSources.CreatePlayerState()
     self.playerState = playerState
     -- EvaluateAll is the canonical discovery boundary; Discover is the
     -- public semantic alias used by integrations that want the same snapshot.
-    self.playerSourceStates = TA.TravelSources:EvaluateAll(playerState)
+    self.playerSourceStates = TA.TravelSources.EvaluateAll(playerState)
 
     for _, sourceState in ipairs(self.playerSourceStates) do
         self:AddPlayerEdgeFromSourceState(sourceState)
@@ -2045,9 +2190,9 @@ end
 -- current spell/item/toy state when they are about to be configured.
 function Graph:GetActionAvailability(actionType, actionID)
     if TA.TravelSources then
-        local source = TA.TravelSources:FindByAction(actionType, actionID)
+        local source = TA.TravelSources.FindByAction(actionType, actionID)
         if source then
-            return TA.TravelSources:Evaluate(source, TA.TravelSources:CreatePlayerState())
+            return TA.TravelSources.Evaluate(source, TA.TravelSources.CreatePlayerState())
         end
     end
 
@@ -2061,9 +2206,9 @@ end
 
 function Graph:GetSourceAvailability(sourceKey)
     if TA.TravelSources and sourceKey then
-        local source = TA.TravelSources:FindByKey(sourceKey)
+        local source = TA.TravelSources.FindByKey(sourceKey)
         if source then
-            return TA.TravelSources:Evaluate(source, TA.TravelSources:CreatePlayerState())
+            return TA.TravelSources.Evaluate(source, TA.TravelSources.CreatePlayerState())
         end
     end
 
@@ -2157,7 +2302,7 @@ function Graph:DebugPlayerEdges()
         print("  Bind location: " .. (GetBindLocation() or "unknown"))
         local bindMapID
         if TA.TravelSources and TA.TravelSources.CreatePlayerState then
-            local playerState = TA.TravelSources:CreatePlayerState()
+            local playerState = TA.TravelSources.CreatePlayerState()
             bindMapID = playerState and playerState.bindMapID
         end
         print("  Bind mapID: " .. tostring(bindMapID))
@@ -2202,8 +2347,18 @@ function Graph:DebugZone(mapID)
     -- Check if other zones can fly here
     print("  Zones that can fly to this zone:")
     local canFlyCount = 0
+    local function hasExplicitFlightEdge(fromMapID)
+        for _, edge in ipairs(self:GetEdgesFrom(fromMapID) or {}) do
+            if edge.to == mapID
+                and (edge.mode == Graph.EdgeType.FLIGHT or edge.mode == Graph.EdgeType.FLIGHT_PATH) then
+                return true
+            end
+        end
+        return false
+    end
     for fromID, fromNode in pairs(self.nodes) do
-        if self:CanFlyBetween(fromID, mapID) then
+        if fromID ~= mapID
+            and (self:CanFlyBetween(fromID, mapID) or hasExplicitFlightEdge(fromID)) then
             canFlyCount = canFlyCount + 1
             if canFlyCount <= 10 then
                 print(string.format("    - %s (%d)", fromNode.name or "Unknown", fromID))
