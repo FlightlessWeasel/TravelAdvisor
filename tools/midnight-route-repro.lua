@@ -84,6 +84,30 @@ local midnightRoute = Graph:FindPath(2393, 2437, {
 assert(midnightRoute.found, "Silvermoon must have an explicit conditional route to Zul'Aman")
 assert(midnightRoute.path[1] and midnightRoute.path[1].to == 2437,
     "Silvermoon-to-Zul'Aman must use the explicit flight edge")
+local bestNowRoute = Graph:FindPath(2393, 2437, {
+    currentMapID = 2393,
+    checkUnlock = false,
+    onlyReady = true,
+})
+assert(not bestNowRoute.found,
+    "Best Now must not present the unverified Silvermoon-to-Zul'Aman flight")
+
+TD.MapIdentity[9001] = { kind = "instance", landingMapID = 2393 }
+TD.MapIdentity[9002] = { kind = "instance", landingMapID = 2393 }
+local firstAliasNode, firstAliasContext = Graph:ResolveRoutingMap(9001)
+local secondAliasNode, secondAliasContext = Graph:ResolveRoutingMap(9002)
+assert(firstAliasNode == 2393 and secondAliasNode == 2393,
+    "Synthetic identity maps must resolve through their shared landing map")
+assert(firstAliasContext.approximate == true and secondAliasContext.approximate == true,
+    "Identity redirects to a different raw map must be approximate")
+local aliasRoute = Graph:FindPath(9001, 9002, {
+    currentMapID = 9001,
+    checkUnlock = false,
+})
+assert(not (aliasRoute.found and #aliasRoute.path == 0),
+    "Distinct identity maps must not produce an empty route")
+assert(aliasRoute.reason ~= "already-here",
+    "Distinct identity maps sharing a landing map must not collapse to already-here")
 
 local function hasEdge(fromMapID, toMapID, mode)
     for _, edge in ipairs(Graph:GetEdgesFrom(fromMapID) or {}) do
@@ -99,6 +123,19 @@ for _, pair in ipairs({
 }) do
     assert(hasEdge(pair[1], pair[2], "portal-room"),
         string.format("Midnight portal topology must include %d -> %d", pair[1], pair[2]))
+    local portalRoute = Graph:FindPath(pair[1], pair[2], {
+        currentMapID = pair[1],
+        checkUnlock = false,
+    })
+    assert(portalRoute.found,
+        string.format("Midnight portal route must exist under the unrestricted policy: %d -> %d", pair[1], pair[2]))
+    local portalBestNow = Graph:FindPath(pair[1], pair[2], {
+        currentMapID = pair[1],
+        checkUnlock = false,
+        onlyReady = true,
+    })
+    assert(not portalBestNow.found,
+        string.format("Best Now must reject the unverified Midnight portal route: %d -> %d", pair[1], pair[2]))
 end
 
 print("Midnight route regression: PASS")

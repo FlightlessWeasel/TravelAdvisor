@@ -158,32 +158,8 @@ function testDungeonIdentitiesAndUnsupportedMaps() {
 }
 
 function testApproximateMapsDoNotCollapseToAlreadyHere() {
-    const currentMapID = 2393;
-    const destinationMapID = 48;
-    const sharedApproximateNode = 13;
-    const currentContext = { routeMapID: sharedApproximateNode, approximate: true };
-    const destinationContext = { routeMapID: sharedApproximateNode, approximate: true };
-    const isExactRoutingMatch = (currentID, destinationID, current, destination) =>
-        currentID === destinationID
-        || (current.approximate !== true && destination.approximate !== true);
-
-    assert.notStrictEqual(currentMapID, destinationMapID);
-    assert.strictEqual(currentContext.routeMapID, destinationContext.routeMapID);
-    assert.ok(
-        currentContext.approximate || destinationContext.approximate,
-        'The live child maps must remain marked approximate when parent fallback is used.',
-    );
-    assert.strictEqual(
-        isExactRoutingMatch(currentMapID, destinationMapID, currentContext, destinationContext),
-        false,
-        'Distinct approximate maps must not produce an exact same-location result.',
-    );
-    assert.strictEqual(
-        isExactRoutingMatch(currentMapID, currentMapID, currentContext, currentContext),
-        true,
-        'The same raw map must still be recognized as the current location.',
-    );
     assertContains(graphSource, 'function Graph:IsExactRoutingMatch');
+    assertContains(graphSource, 'context.routeMapID ~= mapID');
     assertContains(graphSource, 'if startNode == targetNode and self:IsExactRoutingMatch');
     assertContains(advisorSource, 'and Graph:IsExactRoutingMatch(');
     assertContains(dataSource, '[2393] = {');

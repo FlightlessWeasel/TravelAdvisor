@@ -48,7 +48,7 @@ function testRouteActionSafety() {
     assertContains(advisorSource, 'SafeNumber(travel.cooldown, 0)', 'Source cooldown must be checked before creating a button.');
     assertContains(advisorSource, 'function TA:GetSecureActionConfig(travel)', 'Secure action metadata must be centralized.');
     assertContains(advisorSource, 'function TA:GetTravelActionAvailability(travel)', 'Use actions need a live availability check.');
-    assertContains(advisorSource, 'CreateFrame("Button", nil, f, "SecureActionButtonTemplate")', 'Secure buttons must be children of the stable route window.');
+    assertContains(advisorSource, 'CreateFrame("Button", nil, mainFrame, "SecureActionButtonTemplate")', 'Secure buttons must be children of the stable route window.');
     assert.ok(!/useBtn:SetParent\(row\)/.test(advisorSource),
         'Secure action buttons must not be reparented into rebuilt result rows.');
     assert.ok(!advisorSource.includes('CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")'),

@@ -728,6 +728,9 @@ function Graph:GetMapContext(mapID)
             context.routeMapID = identity.routeMapID
                 or identity.landingMapID
                 or identity.regionMapID
+            if context.routeMapID and context.routeMapID ~= mapID then
+                context.approximate = true
+            end
         end
     end
 

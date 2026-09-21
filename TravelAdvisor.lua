@@ -100,6 +100,8 @@ TA._routeRefreshScheduled = false
 TA._pendingDisplay = nil
 TA._cooldownRefreshGeneration = 0
 TA._secureActionButtons = {}
+TA._secureActionButtonPool = {}
+TA._secureActionButtonPoolCount = 0
 TA._secureActionButtonsPendingHide = false
 TA._destinationFilterRefreshScheduled = false
 
@@ -3662,15 +3664,50 @@ function TA:HideSecureActionButtons()
         return false
     end
 
+    local pool = self._secureActionButtonPool
     for _, button in ipairs(self._secureActionButtons or {}) do
         if button then
             button:Hide()
             button:ClearAllPoints()
+            local poolKey = button._secureActionPoolKey
+            if poolKey and not button._secureActionPooled then
+                local bucket = pool[poolKey]
+                if not bucket then
+                    bucket = {}
+                    pool[poolKey] = bucket
+                end
+                bucket[#bucket + 1] = button
+                button._secureActionPooled = true
+                self._secureActionButtonPoolCount = self._secureActionButtonPoolCount + 1
+            end
         end
     end
     self._secureActionButtons = {}
     self._secureActionButtonsPendingHide = false
     return true
+end
+
+function TA:GetSecureActionPoolKey(actionConfig)
+    if not actionConfig then return nil end
+    return tostring(actionConfig.type) .. ":" .. tostring(actionConfig.value)
+end
+
+function TA:AcquireSecureActionButton(actionConfig)
+    if IsInCombatLockdown() or not mainFrame then return nil end
+    local poolKey = self:GetSecureActionPoolKey(actionConfig)
+    local bucket = poolKey and self._secureActionButtonPool[poolKey]
+    local button = bucket and table.remove(bucket)
+    if button then
+        self._secureActionButtonPoolCount = math.max(0, self._secureActionButtonPoolCount - 1)
+        button._secureActionPooled = false
+    end
+    if not button then
+        button = CreateFrame("Button", nil, mainFrame, "SecureActionButtonTemplate")
+    end
+    button._secureActionPoolKey = poolKey
+    button._secureActionPooled = false
+    button:Show()
+    return button
 end
 
 function TA:GetSecureActionConfig(travel)
@@ -4066,7 +4103,8 @@ function TA:DisplayResults(results, title, destMapID, destName)
                 -- row tree is rebuilt and orphaned during normal refreshes;
                 -- making a secure button its child can turn those ordinary
                 -- cleanup operations into protected-frame operations.
-                local useBtn = CreateFrame("Button", nil, f, "SecureActionButtonTemplate")
+                local useBtn = self:AcquireSecureActionButton(actionConfig)
+                if not useBtn then return end
                 useBtn:SetSize(20, 20)
                 useBtn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -btnRightOffset, -5)
                 btnRightOffset = btnRightOffset + 24

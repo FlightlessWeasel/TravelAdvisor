@@ -17,6 +17,7 @@ const checks = [
     ['Taint-safety regression', path.join(__dirname, 'taint-safety.test.js')],
     ['Post-travel flight regression', path.join(__dirname, 'post-travel-flight.test.js')],
     ['Midnight route regression', path.join(__dirname, 'midnight.test.js')],
+    ['Midnight route runtime regression', path.join(__dirname, 'midnight-route.test.js')],
     ['Travel-data validator', path.join(__dirname, 'validate.js')],
 ];
 

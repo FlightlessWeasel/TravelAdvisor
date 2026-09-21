@@ -55,6 +55,11 @@ function testCanonicalModuleSurface() {
     assert.ok(graphSource.includes('GetPlayerSourceDiagnostics'), 'Graph must expose excluded-source diagnostics.');
     assert.ok(advisorSource.includes('sourceKey'), 'Legacy adapter must preserve stable source keys.');
     assert.ok(advisorSource.includes('HideSecureActionButtons'), 'Secure buttons must be retired before dynamic rows are rebuilt.');
+    assert.ok(advisorSource.includes('_secureActionButtonPool'), 'Secure buttons must have a bounded reuse pool.');
+    assert.ok(advisorSource.includes('AcquireSecureActionButton'), 'Secure buttons must be acquired through the reuse helper.');
+    assert.ok(advisorSource.includes('pool[poolKey]'), 'Secure buttons must be returned to per-config pool buckets.');
+    assert.ok(!advisorSource.includes('CreateFrame("Button", nil, f, "SecureActionButtonTemplate")'),
+        'DisplayResults must not allocate protected buttons directly per render.');
     assert.ok(advisorSource.includes('GetSecureActionConfig(travel)'), 'Secure actions must use canonical stable metadata.');
     assert.ok(sourcesSource.includes('false, true, false, false'), 'Item routing must use bag-only counts.');
     assert.ok(sourcesSource.includes('USABILITY_UNKNOWN'), 'Unknown usability must be non-actionable.');
