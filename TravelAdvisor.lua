@@ -4011,7 +4011,7 @@ function TA:DisplayResults(results, title, destMapID, destName)
                 -- row tree is rebuilt and orphaned during normal refreshes;
                 -- making a secure button its child can turn those ordinary
                 -- cleanup operations into protected-frame operations.
-                local useBtn = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+                local useBtn = CreateFrame("Button", nil, f, "SecureActionButtonTemplate")
                 useBtn:SetSize(20, 20)
                 useBtn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -btnRightOffset, -5)
                 btnRightOffset = btnRightOffset + 24

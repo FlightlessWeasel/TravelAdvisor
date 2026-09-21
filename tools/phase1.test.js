@@ -48,7 +48,9 @@ function testRouteActionSafety() {
     assertContains(advisorSource, 'SafeNumber(travel.cooldown, 0)', 'Source cooldown must be checked before creating a button.');
     assertContains(advisorSource, 'function TA:GetSecureActionConfig(travel)', 'Secure action metadata must be centralized.');
     assertContains(advisorSource, 'function TA:GetTravelActionAvailability(travel)', 'Use actions need a live availability check.');
-    assertContains(advisorSource, 'CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")', 'Secure buttons must not be children of rebuilt rows.');
+    assertContains(advisorSource, 'CreateFrame("Button", nil, f, "SecureActionButtonTemplate")', 'Secure buttons must be children of the stable route window.');
+    assert.ok(!advisorSource.includes('CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")'),
+        'Secure buttons must not be children of UIParent.');
     assert.ok(!advisorSource.includes('useBtn:SetScript("PreClick"'),
         'Secure action attributes must not be mutated from a click-time Lua handler.');
     assertContains(advisorSource, 'useBtn:SetAttribute("type", actionConfig.type)', 'Buttons must use the resolved action type.');
