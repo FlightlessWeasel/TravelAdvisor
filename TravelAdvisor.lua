@@ -434,7 +434,7 @@ function TA:SetRouteWaypoints(route, destinationName, destinationMapID)
     -- Helper to add waypoint if not duplicate
     local function addWP(mapID, x, y, name, isFirst)
         mapID = SafeNumber(mapID)
-        if not mapID or self:IsWaypointUnverified(mapID) then return nil end
+        if not IsValidMapID(mapID) or self:IsWaypointUnverified(mapID) then return nil end
         -- Skip if we already have a waypoint for this mapID
         if addedMapIDs[mapID] then return nil end
         addedMapIDs[mapID] = true

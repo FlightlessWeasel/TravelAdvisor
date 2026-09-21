@@ -68,10 +68,6 @@ assert(fallback and fallback.from == 200 and fallback.to == 300,
 assert(fallback.accessState == "unknown" and fallback.actionableNow == false,
     "post-travel flight must remain conditional and informational")
 
-local direct = Graph:FindPath(100, 300, {
-    currentMapID = 100,
-    checkUnlock = false,
-})
 assert(Graph:BuildPostTravelFlightEdge(100, 300, 100) == nil,
     "post-travel flight must not be synthesized directly from the starting node")
 

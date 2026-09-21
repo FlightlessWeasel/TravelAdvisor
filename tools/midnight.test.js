@@ -73,9 +73,11 @@ assertContains(graphSource, 'edge.to == mapID',
 assertContains(advisorSource, 'route.status=calculated-no-route',
     'Troubleshooting reports must distinguish calculated no-route results.');
 for (const hubName of ['Silvermoon City', 'Harandar', 'Voidstorm']) {
-    const hubStart = dataSource.indexOf(`name = "${hubName}",\n        mapID =`);
+    const hubMatch = new RegExp(`(?:^|\\r?\\n)[ \\t]*name\\s*=\\s*"${hubName}",[ \\t]*(?:\\r?\\n)[ \\t]*mapID\\s*=`, 'm').exec(dataSource);
+    const hubStart = hubMatch ? hubMatch.index : -1;
     assert.ok(hubStart >= 0, `Midnight hub ${hubName} must be present.`);
-    const hubEnd = dataSource.indexOf('\n    },', hubStart);
+    const hubEndMatch = /\r?\n[ \t]*\},/.exec(dataSource.slice(hubStart));
+    const hubEnd = hubEndMatch ? hubStart + hubEndMatch.index : -1;
     const hub = dataSource.slice(hubStart, hubEnd >= 0 ? hubEnd : hubStart + 600);
     assertContains(hub, 'waypointsUnverified = true',
         `${hubName} must be marked as lacking verified waypoint coordinates.`);
@@ -86,7 +88,7 @@ assertContains(advisorSource, 'if self:IsWaypointUnverified(hubMapID) then',
     'Unverified Midnight hubs must suppress portal waypoint creation.');
 assertContains(advisorSource, 'not self:IsWaypointUnverified(waypointMapID)',
     'Unverified Midnight hubs must suppress route waypoint buttons and native fallback pins.');
-assertContains(advisorSource, 'if not mapID or self:IsWaypointUnverified(mapID) then return nil end',
+assertContains(advisorSource, 'if not IsValidMapID(mapID) or self:IsWaypointUnverified(mapID) then return nil end',
     'TomTom waypoint creation must reject unverified hub map IDs.');
 assertContains(advisorSource, 'not self:IsWaypointUnverified(safeDestinationMapID)',
     'Destination waypoint fallback must reject unverified Midnight hubs.');
