@@ -10,7 +10,7 @@ References:
 - [Patch 12.1.0 API changes](https://warcraft.wiki.gg/wiki/Patch_12.1.0/API_changes)
 - [TOC interface format and interface numbers](https://warcraft.wiki.gg/wiki/TOC_format)
 
-The current repository has no embedded WoW Lua runtime. Static checks establish data and source-shape invariants only; the in-game verification matrix below remains required for API and secure-action claims.
+The current repository has no embedded WoW Lua runtime. Static checks establish data and source-shape invariants only; the in-game verification matrix below remains required for API and secure-action claims. LuaJIT is an optional local dependency for the behavioral repro harnesses. When it is unavailable, those harnesses print `SKIP` and are non-fatal; when a LuaJIT runtime is found, any harness failure is fatal.
 
 The WoW MCP server is the API source of truth for this project. API lookups and lint below target Retail/mainline (Midnight/12.1), rather than relying on generic web documentation or memory.
 
@@ -56,7 +56,7 @@ From the repository root:
 node tools/check.js
 ```
 
-`check.js` is the single command for all available static checks. It runs the dependency-free Phase 0 through Phase 5 contract tests and the strict data validator. The command must exit zero before a Phase 5 data change is considered complete.
+`check.js` is the single command for all available static checks and optional LuaJIT repro harnesses. It runs the Phase 0 through Phase 7 contract tests, secret/taint safety harnesses, the direct post-travel flight graph regression, the Midnight route regression, and the strict data validator. LuaJIT-backed checks skip cleanly when the optional runtime is absent. The command must exit zero before a data or routing change is considered complete.
 
 `phase0.test.js` is a dependency-free contract test for the source/destination and route-policy fixtures. It does not emulate the WoW client. Run it directly when only the contract tests are needed.
 
@@ -133,12 +133,16 @@ The validator currently checks:
 ## Phase 4 implementation checks
 
 Phase 4 makes graph topology explicit. `TravelGraph.lua` consumes typed
-`TravelData.ZoneConnections` and portal-hub transitions, removes the old
-destination-only same-continent flight shortcut, and carries mode, timing,
-confidence, requirements, interaction, and region/landing/instance identity
-metadata on every route step. Static edges use the canonical requirement
-evaluator where available; node access and unsupported parent/instance map
-contexts are checked separately.
+`TravelData.ZoneConnections` and portal-hub transitions, keeps the player's
+current node on explicit topology, and adds a target-directed approximate
+flight fallback only after a route has reached an intermediate node. This lets
+teleports, portals, and class travel compose with a final movement leg without
+inventing an all-pairs same-continent graph. The fallback is conditional and
+informational until flight access is discovered. Every route step carries mode,
+timing, confidence, requirements, interaction, and region/landing/instance
+identity metadata. Static edges use the canonical requirement evaluator where
+available; node access and unsupported parent/instance map contexts are checked
+separately.
 
 The route policies are explicit and named: `Best Now`, `Best If Ready`, `Best
 After Wait`, fewest transitions, fewest interactions, and closest useful
@@ -149,12 +153,19 @@ button.
 Static checks:
 
 - `node tools/phase4.test.js` covers explicit multi-hop topology, no invented
-  same-continent edges, mode/access metadata, cooldown policy ranking, dungeon
-  identity fields, unsupported maps, and cache dimensions.
+  same-continent edges from the current node, post-travel final-flight
+  composition, mode/access metadata, cooldown policy ranking, dungeon identity
+  fields, unsupported maps, and cache dimensions.
 - `node tools/phase0.test.js`, `node tools/phase1.test.js`,
   `node tools/phase2.test.js`, and `node tools/phase3.test.js` remain passing.
 - `node tools/check.js` includes the Phase 4 contract test before running the
   strict validator.
+- `node tools/post-travel-flight.test.js` runs the actual Lua
+  `TravelGraph:FindPath`/`BuildPostTravelFlightEdge` implementation when LuaJIT
+  is available. It verifies intermediate-node composition, starting-node
+  exclusion, portal-only and cross-continent rejection, and `onlyReady`
+  rejection of unknown fallback access. It complements the Phase 4 JavaScript
+  fixture tests and skips non-fatally without LuaJIT.
 
 The strict validator now passes the corrected Phase 5 catalog. Exact flight
 networks, discovered access, transport schedules, and unverified dungeon

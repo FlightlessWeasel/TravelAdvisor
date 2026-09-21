@@ -170,6 +170,61 @@ Sources.REASON_TEXT = REASON_TEXT
 Sources.SourceCoverage = SOURCE_COVERAGE
 Sources.SOURCE_COVERAGE = SOURCE_COVERAGE
 
+-- Retail can return secret values in restricted content.  Secret values are
+-- displayable by Blizzard-owned widgets, but addon code must not inspect,
+-- compare, convert, concatenate, or persist them.  Keep all addon-owned
+-- state ordinary and let callers treat a secret result as unavailable.
+local function isSecretValue(value)
+    if value == nil then return false end
+    local checker = _G.issecretvalue
+    if type(checker) ~= "function" then return false end
+    local ok, secret = pcall(checker, value)
+    return ok and secret == true
+end
+
+local function safeNumber(value)
+    if value == nil or isSecretValue(value) then return nil end
+    local ok, number = pcall(tonumber, value)
+    if not ok or number == nil or isSecretValue(number) or type(number) ~= "number" then
+        return nil
+    end
+    return number
+end
+
+local function safeBoolean(value)
+    if value == nil or isSecretValue(value) then return nil end
+    return value == true
+end
+
+local function safeString(value)
+    if value == nil or isSecretValue(value) or type(value) ~= "string" then return nil end
+    return value ~= "" and value or nil
+end
+
+local function safeDisplayValue(value)
+    if value == nil or isSecretValue(value) then return nil end
+    if type(value) == "string" then
+        return value ~= "" and value or nil
+    end
+    if type(value) == "number" then
+        return value > 0 and value or nil
+    end
+    return nil
+end
+
+local function safeKeyPart(value)
+    if value == nil or isSecretValue(value) then return nil end
+    if type(value) == "string" or type(value) == "number" then
+        return tostring(value)
+    end
+    return nil
+end
+
+Sources.IsSecretValue = isSecretValue
+Sources.SafeNumber = safeNumber
+Sources.SafeBoolean = safeBoolean
+Sources.SafeString = safeString
+
 function Sources:GetReasonText(reason)
     return REASON_TEXT[reason] or reason or "Unknown"
 end
@@ -189,18 +244,34 @@ local function firstNonNil(...)
     return nil
 end
 
-local function copyValue(value, depth)
+local function copyValue(value, depth, opaque)
+    if isSecretValue(value) then return nil end
     if type(value) ~= "table" then return value end
+    if value == _G or (type(opaque) == "table" and value == opaque) then return value end
     depth = depth or 0
     if depth > 8 then return nil end
 
     local result = {}
-    for key, child in pairs(value) do
-        if type(key) ~= "function" and type(child) ~= "function" then
-            result[key] = copyValue(child, depth + 1)
+    local pairsOK, iterator, state, control = pcall(pairs, value)
+    if not pairsOK or type(iterator) ~= "function" then return nil end
+    while true do
+        local nextOK, key, child = pcall(iterator, state, control)
+        if not nextOK or key == nil then break end
+        control = key
+        if not isSecretValue(key) and not isSecretValue(child)
+            and type(key) ~= "function" and type(child) ~= "function" then
+            local childOK, copied = pcall(copyValue, child, depth + 1, opaque)
+            if childOK and copied ~= nil then result[key] = copied end
         end
     end
     return result
+end
+
+local function copyState(state, api)
+    api = api or (state and state.api)
+    local copied = copyValue(state, 0, api) or {}
+    copied.api = api or copied.api or _G
+    return copied
 end
 
 function Sources:GetCoverage()
@@ -208,7 +279,8 @@ function Sources:GetCoverage()
 end
 
 local function normalizeText(value)
-    if type(value) ~= "string" then return nil end
+    value = safeString(value)
+    if not value then return nil end
     return value:lower():gsub("%s+", ""):gsub("['`%-]", "")
 end
 
@@ -217,7 +289,8 @@ local function professionKey(value)
 end
 
 local function isPositiveMapID(value)
-    return type(value) == "number" and value > 0
+    value = safeNumber(value)
+    return value ~= nil and value > 0
 end
 
 local function asList(value)
@@ -227,6 +300,7 @@ local function asList(value)
 end
 
 local function contains(value, wanted)
+    if isSecretValue(value) or isSecretValue(wanted) then return nil end
     if value == nil then return true end
     if type(value) == "string" or type(value) == "number" then
         if type(value) == "string" and type(wanted) == "string" then
@@ -247,10 +321,16 @@ local function getData(data)
 end
 
 local function currentTime(state)
-    if state and type(state.now) == "number" then return state.now end
+    if state then
+        local value = safeNumber(state.now)
+        if value ~= nil then return value end
+    end
     if type(_G.GetTime) == "function" then
         local ok, value = safeCall(_G.GetTime)
-        if ok and type(value) == "number" then return value end
+        if ok then
+            value = safeNumber(value)
+            if value ~= nil then return value end
+        end
     end
     return 0
 end
@@ -258,23 +338,22 @@ end
 local function getUnitClass()
     if type(_G.UnitClass) ~= "function" then return nil end
     local ok, localized, token = safeCall(_G.UnitClass, "player")
-    if ok then return token or localized end
+    if ok then return safeString(token) or safeString(localized) end
     return nil
 end
 
 local function getUnitRace()
     if type(_G.UnitRace) ~= "function" then return nil end
     local ok, localized, token = safeCall(_G.UnitRace, "player")
-    if ok then return token or localized end
+    if ok then return safeString(token) or safeString(localized) end
     return nil
 end
 
 local function getFaction()
     if type(_G.UnitFactionGroup) == "function" then
         local ok, faction = safeCall(_G.UnitFactionGroup, "player")
-        if ok then return faction end
+        if ok then return safeString(faction) end
     end
-    if type(_G.UnitFactionGroup) == "function" then return safeCall(_G.UnitFactionGroup, "player") end
     return nil
 end
 
@@ -288,7 +367,7 @@ local function spellKnown(spellID, state)
             state.spellKnowledge,
         }) do
             if knownTable and knownTable[spellID] ~= nil then
-                return knownTable[spellID] == true
+                return safeBoolean(knownTable[spellID])
             end
         end
     end
@@ -297,36 +376,48 @@ local function spellKnown(spellID, state)
     local spellBook = api.C_SpellBook or C_SpellBook
     if spellBook and type(spellBook.IsSpellKnown) == "function" then
         local ok, known = safeCall(spellBook.IsSpellKnown, spellID)
-        if ok then return known == true end
+        if ok then
+            local value = safeBoolean(known)
+            if value ~= nil then return value end
+        end
     end
     local spellAPI = api.C_Spell or C_Spell
     if spellAPI and type(spellAPI.IsSpellKnown) == "function" then
         local ok, known = safeCall(spellAPI.IsSpellKnown, spellID)
-        if ok then return known == true end
+        if ok then
+            local value = safeBoolean(known)
+            if value ~= nil then return value end
+        end
     end
     if type(api.IsSpellKnown) == "function" then
         local ok, known = safeCall(api.IsSpellKnown, spellID)
-        if ok then return known == true end
+        if ok then
+            local value = safeBoolean(known)
+            if value ~= nil then return value end
+        end
     end
     if type(api.IsPlayerSpell) == "function" then
         local ok, known = safeCall(api.IsPlayerSpell, spellID)
-        if ok then return known == true end
+        if ok then
+            local value = safeBoolean(known)
+            if value ~= nil then return value end
+        end
     end
     return nil
 end
 
 local function toyKnown(itemID, state)
     if state and state.toys and state.toys[itemID] ~= nil then
-        return state.toys[itemID] == true
+        return safeBoolean(state.toys[itemID])
     end
     if state and state.knownToys and state.knownToys[itemID] ~= nil then
-        return state.knownToys[itemID] == true
+        return safeBoolean(state.knownToys[itemID])
     end
 
     local api = state and state.api or _G
     if type(api.PlayerHasToy) == "function" then
         local ok, known = safeCall(api.PlayerHasToy, itemID)
-        if ok then return known == true end
+        if ok then return safeBoolean(known) end
     end
     return nil
 end
@@ -334,12 +425,16 @@ end
 local function itemQuantities(itemID, state)
     if state and state.items and state.items[itemID] ~= nil then
         local value = state.items[itemID]
+        if isSecretValue(value) then return nil, nil end
         if type(value) == "table" then
-            local bagCount = tonumber(firstNonNil(value.bagCount, value.inventoryCount, value.count))
-            if bagCount == nil and value.owned ~= nil then bagCount = value.owned and 1 or 0 end
-            return bagCount, tonumber(firstNonNil(value.bankCount, value.bank))
+            local bagCount = safeNumber(firstNonNil(value.bagCount, value.inventoryCount, value.count))
+            if bagCount == nil and value.owned ~= nil then
+                local owned = safeBoolean(value.owned)
+                if owned ~= nil then bagCount = owned and 1 or 0 end
+            end
+            return bagCount, safeNumber(firstNonNil(value.bankCount, value.bank))
         end
-        return tonumber(value) or 0, nil
+        return safeNumber(value) or 0, nil
     end
 
     local api = state and state.api or _G
@@ -347,18 +442,20 @@ local function itemQuantities(itemID, state)
     if itemAPI and type(itemAPI.GetItemCount) == "function" then
         local bagOK, bagCount = safeCall(itemAPI.GetItemCount, itemID, false, true, false, false)
         local totalOK, totalCount = safeCall(itemAPI.GetItemCount, itemID, true, true, false, false)
-        if bagOK and type(bagCount) == "number" then
-            local bankCount = totalOK and type(totalCount) == "number"
-                and math.max(0, totalCount - bagCount) or nil
+        bagCount = bagOK and safeNumber(bagCount) or nil
+        totalCount = totalOK and safeNumber(totalCount) or nil
+        if bagCount ~= nil then
+            local bankCount = totalCount and math.max(0, totalCount - bagCount) or nil
             return bagCount, bankCount
         end
     end
     if type(api.GetItemCount) == "function" then
         local bagOK, bagCount = safeCall(api.GetItemCount, itemID, false, true, false, false)
         local totalOK, totalCount = safeCall(api.GetItemCount, itemID, true, true, false, false)
-        if bagOK and type(bagCount) == "number" then
-            local bankCount = totalOK and type(totalCount) == "number"
-                and math.max(0, totalCount - bagCount) or nil
+        bagCount = bagOK and safeNumber(bagCount) or nil
+        totalCount = totalOK and safeNumber(totalCount) or nil
+        if bagCount ~= nil then
+            local bankCount = totalCount and math.max(0, totalCount - bagCount) or nil
             return bagCount, bankCount
         end
     end
@@ -377,35 +474,57 @@ end
 
 local function getSpellOverride(spellID, source, state)
     local explicit = firstNonNil(source.overrideSpellID, source.spellOverrideID, source.spellOverride)
-    if type(explicit) == "number" and explicit > 0 then return explicit end
+    explicit = safeNumber(explicit)
+    if explicit and explicit > 0 then return explicit end
 
     local api = state and state.api or _G
     local spellAPI = api.C_Spell or C_Spell
     if spellAPI and type(spellAPI.GetOverrideSpell) == "function" then
         local ok, override = safeCall(spellAPI.GetOverrideSpell, spellID)
-        if ok and type(override) == "number" and override > 0 then return override end
+        override = ok and safeNumber(override) or nil
+        if override and override > 0 then return override end
     end
     if type(api.GetOverrideSpell) == "function" then
         local ok, override = safeCall(api.GetOverrideSpell, spellID)
-        if ok and type(override) == "number" and override > 0 then return override end
+        override = ok and safeNumber(override) or nil
+        if override and override > 0 then return override end
     end
-    return spellID
+    return safeNumber(spellID)
 end
 
 local function cooldownInfo(value1, value2, value3, value4)
     if type(value1) == "table" then
+        if isSecretValue(value1) then return { unavailable = true } end
+        local rawStart = firstNonNil(value1.startTime, value1.start, value1[1])
+        local rawDuration = firstNonNil(value1.duration, value1[2])
+        local rawEnabled = firstNonNil(value1.isEnabled, value1.enabled, value1[3])
+        local rawModRate = firstNonNil(value1.modRate, value1.rate, value1[4])
+        local start = safeNumber(rawStart)
+        local duration = safeNumber(rawDuration)
+        local modRate = safeNumber(rawModRate)
         return {
-            start = tonumber(firstNonNil(value1.startTime, value1.start, value1[1])) or 0,
-            duration = tonumber(firstNonNil(value1.duration, value1[2])) or 0,
-            enabled = firstNonNil(value1.isEnabled, value1.enabled, value1[3]),
-            modRate = tonumber(firstNonNil(value1.modRate, value1.rate, value1[4])) or 1,
+            start = start or 0,
+            duration = duration or 0,
+            enabled = safeBoolean(rawEnabled),
+            modRate = modRate or 1,
+            unavailable = (rawStart ~= nil and start == nil)
+                or (rawDuration ~= nil and duration == nil)
+                or (rawEnabled ~= nil and safeBoolean(rawEnabled) == nil)
+                or (rawModRate ~= nil and modRate == nil),
         }
     end
+    local start = safeNumber(value1)
+    local duration = safeNumber(value2)
+    local modRate = safeNumber(value4)
     return {
-        start = tonumber(value1) or 0,
-        duration = tonumber(value2) or 0,
-        enabled = value3,
-        modRate = tonumber(value4) or 1,
+        start = start or 0,
+        duration = duration or 0,
+        enabled = safeBoolean(value3),
+        modRate = modRate or 1,
+        unavailable = (value1 ~= nil and start == nil)
+            or (value2 ~= nil and duration == nil)
+            or (value3 ~= nil and safeBoolean(value3) == nil)
+            or (value4 ~= nil and modRate == nil),
     }
 end
 
@@ -436,10 +555,11 @@ local function readItemCooldown(itemID, state)
 end
 
 local function remaining(info, now)
-    if not info then return 0 end
+    if not info or info.unavailable then return 0 end
     if info.enabled == false or info.enabled == 0 then return 0 end
     if info.start <= 0 or info.duration <= 0 then return 0 end
     local modRate = info.modRate > 0 and info.modRate or 1
+    now = safeNumber(now) or 0
     return math.max(0, (info.start + info.duration - now) / modRate)
 end
 
@@ -452,20 +572,43 @@ local function spellCharges(spellID, state, now)
     if not ok then return nil end
     local charges, maxCharges, start, duration, modRate
     if type(a) == "table" then
-        charges = tonumber(firstNonNil(a.currentCharges, a.charges, a[1]))
-        maxCharges = tonumber(firstNonNil(a.maxCharges, a.max, a[2]))
-        start = tonumber(firstNonNil(a.cooldownStartTime, a.startTime, a.start, a[3])) or 0
-        duration = tonumber(firstNonNil(a.cooldownDuration, a.duration, a[4])) or 0
-        modRate = tonumber(firstNonNil(a.chargeModRate, a.modRate, a.rate, a[5])) or 1
+        if isSecretValue(a) then return nil, true end
+        local rawCharges = firstNonNil(a.currentCharges, a.charges, a[1])
+        local rawMaxCharges = firstNonNil(a.maxCharges, a.max, a[2])
+        local rawStart = firstNonNil(a.cooldownStartTime, a.startTime, a.start, a[3])
+        local rawDuration = firstNonNil(a.cooldownDuration, a.duration, a[4])
+        local rawModRate = firstNonNil(a.chargeModRate, a.modRate, a.rate, a[5])
+        charges = safeNumber(rawCharges)
+        maxCharges = safeNumber(rawMaxCharges)
+        start = safeNumber(rawStart) or 0
+        duration = safeNumber(rawDuration) or 0
+        modRate = safeNumber(rawModRate) or 1
+        if (rawCharges ~= nil and charges == nil)
+            or (rawMaxCharges ~= nil and maxCharges == nil)
+            or (rawStart ~= nil and safeNumber(rawStart) == nil)
+            or (rawDuration ~= nil and safeNumber(rawDuration) == nil)
+            or (rawModRate ~= nil and safeNumber(rawModRate) == nil) then
+            return nil, true
+        end
     else
-        charges, maxCharges, start, duration, modRate = tonumber(a), tonumber(b), tonumber(c) or 0, tonumber(d) or 0, tonumber(e) or 1
+        charges = safeNumber(a)
+        maxCharges = safeNumber(b)
+        start = safeNumber(c) or 0
+        duration = safeNumber(d) or 0
+        modRate = safeNumber(e) or 1
+        if (a ~= nil and charges == nil) or (b ~= nil and maxCharges == nil)
+            or (c ~= nil and safeNumber(c) == nil)
+            or (d ~= nil and safeNumber(d) == nil)
+            or (e ~= nil and safeNumber(e) == nil) then
+            return nil, true
+        end
     end
     if charges == nil and maxCharges == nil then return nil end
     local recharge = 0
     if start > 0 and duration > 0 then
         recharge = math.max(0, (start + duration - now) / (modRate > 0 and modRate or 1))
     end
-    return { current = charges, max = maxCharges, recharge = recharge, modRate = modRate }
+    return { current = charges, max = maxCharges, recharge = recharge, modRate = modRate }, false
 end
 
 local function resolveFromTables(data, value)
@@ -592,9 +735,11 @@ local function callResolver(resolver, value, source, state)
     if type(resolver) ~= "function" then return nil end
     local ok, result = safeCall(resolver, value, source, state)
     if not ok then return nil end
-    if type(result) == "number" then return result end
+    if type(result) == "number" or isSecretValue(result) then
+        return safeNumber(result)
+    end
     if type(result) == "table" then
-        return firstNonNil(result.mapID, result.destinationMapID, result.id), result
+        return safeNumber(firstNonNil(result.mapID, result.destinationMapID, result.id)), result
     end
     return nil
 end
@@ -859,7 +1004,8 @@ function Sources.BuildCatalog(data, options)
                     end
                     catalog[#catalog + 1] = record
                     byKey[record.key] = record
-                    local actionKey = record.action.type .. ":" .. tostring(record.action.id)
+                    local actionKey = (safeKeyPart(record.action.type) or "unknown")
+                        .. ":" .. (safeKeyPart(record.action.id) or "unknown")
                     byAction[actionKey] = byAction[actionKey] or record
                 end
             end
@@ -896,6 +1042,7 @@ end
 
 function Sources.FindByKey(key, options)
     options = options or {}
+    if isSecretValue(key) then return nil end
     if not Sources._catalog or options.rebuild or Sources._catalogData ~= getData(options.data) then Sources.BuildCatalog(options.data, options) end
     return Sources._byKey and Sources._byKey[key]
 end
@@ -909,12 +1056,14 @@ function Sources.FindByAction(actionType, actionID, options)
         local record = Sources.FindByKey(actionType, options)
         if record then return record end
     end
+    if isSecretValue(actionType) or isSecretValue(actionID) then return nil end
     if type(actionID) == "string" then
         local itemID = actionID:match("^item:(%d+)$")
         if itemID then actionID = tonumber(itemID) end
     end
     if not Sources._catalog or options.rebuild or Sources._catalogData ~= getData(options.data) then Sources.BuildCatalog(options.data, options) end
-    local direct = Sources._byAction and Sources._byAction[tostring(actionType) .. ":" .. tostring(actionID)]
+    local directKey = (safeKeyPart(actionType) or "unknown") .. ":" .. (safeKeyPart(actionID) or "unknown")
+    local direct = Sources._byAction and Sources._byAction[directKey]
     if direct then return direct end
     for _, record in ipairs(Sources._catalog or {}) do
         if (record.action.type == actionType or record.kind == "hearthstone")
@@ -926,7 +1075,8 @@ function Sources.FindByAction(actionType, actionID, options)
 end
 
 local function addProfession(set, value)
-    if type(value) ~= "string" or value == "" then return end
+    value = safeString(value)
+    if not value or value == "" then return end
     set[value] = true
     set[value:lower()] = true
     local key = professionKey(value)
@@ -954,11 +1104,11 @@ local function collectProfessions(api)
             if key then
                 details[key] = {
                     name = name,
-                    skillLevel = tonumber(skillLevel),
-                    maxSkillLevel = tonumber(maxSkillLevel),
-                    numAbilities = tonumber(numAbilities),
-                    spellOffset = tonumber(spellOffset),
-                    skillLineID = tonumber(skillLineID),
+                    skillLevel = safeNumber(skillLevel),
+                    maxSkillLevel = safeNumber(maxSkillLevel),
+                    numAbilities = safeNumber(numAbilities),
+                    spellOffset = safeNumber(spellOffset),
+                    skillLineID = safeNumber(skillLineID),
                 }
             end
         end
@@ -974,14 +1124,16 @@ local function getSpecialization(api)
     if not ok or not index then return nil, nil end
     local infoOK, specID, name = safeCall(api.GetSpecializationInfo, index)
     if not infoOK then return nil, nil end
-    return specID, name
+    return safeNumber(specID), safeString(name)
 end
 
 local function resolveBindMapID(bindLocation, data)
     if type(bindLocation) == "table" then
-        return bindLocation.mapID, bindLocation.name or bindLocation.displayName
+        if isSecretValue(bindLocation) then return nil, nil end
+        return safeNumber(bindLocation.mapID), safeString(bindLocation.name)
     end
-    if type(bindLocation) ~= "string" or bindLocation == "" then return nil, bindLocation end
+    bindLocation = safeString(bindLocation)
+    if not bindLocation or bindLocation == "" then return nil, bindLocation end
     if type(_G.LibStub) == "function" then
         local ok, lib = safeCall(_G.LibStub, "LibZoneNameToMap-1.0", true)
         if ok and lib and type(lib.GetMapIDFromZoneName) == "function" then
@@ -998,7 +1150,10 @@ local function resolveBindMapID(bindLocation, data)
         local ok, current = safeCall(api.GetBestMapForUnit, "player")
         if ok and current then
             local infoOK, info = safeCall(api.GetMapInfo, current)
-            if infoOK and info and info.name == bindLocation then return current, bindLocation end
+            if infoOK and info and not isSecretValue(info)
+                and safeString(info.name) == bindLocation then
+                return safeNumber(current), bindLocation
+            end
         end
     end
     return nil, bindLocation
@@ -1006,8 +1161,8 @@ end
 
 function Sources.CreatePlayerState(options)
     options = options or {}
-    local state = copyValue(options) or {}
-    state.api = options.api or state.api or _G
+    local api = options.api or _G
+    local state = copyState(options, api)
     state.now = currentTime(options)
     state.class = state.class or getUnitClass()
     state.race = state.race or getUnitRace()
@@ -1017,15 +1172,19 @@ function Sources.CreatePlayerState(options)
     local mapAPI = api.C_Map or C_Map or _G.C_Map
     if not state.currentMapID and mapAPI and type(mapAPI.GetBestMapForUnit) == "function" then
         local ok, mapID = safeCall(mapAPI.GetBestMapForUnit, "player")
-        if ok then state.currentMapID = mapID end
+        if ok then state.currentMapID = safeNumber(mapID) end
     end
     if not state.currentZoneName and state.currentMapID and mapAPI and type(mapAPI.GetMapInfo) == "function" then
         local ok, mapInfo = safeCall(mapAPI.GetMapInfo, state.currentMapID)
-        if ok and mapInfo then state.currentZoneName = mapInfo.name end
+        if ok and mapInfo and not isSecretValue(mapInfo) then
+            state.currentZoneName = safeString(mapInfo.name)
+        end
     end
     if not state.bindLocation then
         local ok, bindLocation = safeCall(api.GetBindLocation)
-        if ok then state.bindLocation = bindLocation end
+        if ok and not isSecretValue(bindLocation) then
+            state.bindLocation = safeString(bindLocation) or copyValue(bindLocation)
+        end
     end
     if not state.bindMapID then
         state.bindMapID = resolveBindMapID(state.bindLocation, data)
@@ -1056,23 +1215,23 @@ local function questComplete(quest, state)
     if quest == nil then return true end
     if type(quest) == "function" then
         local ok, result = safeCall(quest, state)
-        return ok and result == true
+        return ok and safeBoolean(result)
     end
     local questID = type(quest) == "table" and firstNonNil(quest.questID, quest.id, quest[1]) or quest
     local required = type(quest) ~= "table" or quest.completed ~= false
     if not required then return true end
     if type(state.completedQuests) == "table" and state.completedQuests[questID] ~= nil then
-        return state.completedQuests[questID] == true
+        return safeBoolean(state.completedQuests[questID])
     end
     local api = state.api or _G
     local questLog = api.C_QuestLog or _G.C_QuestLog
     if questLog and type(questLog.IsQuestFlaggedCompleted) == "function" then
         local ok, complete = safeCall(questLog.IsQuestFlaggedCompleted, questID)
-        if ok then return complete == true end
+        if ok then return safeBoolean(complete) end
     end
     if type(api.IsQuestFlaggedCompleted) == "function" then
         local ok, complete = safeCall(api.IsQuestFlaggedCompleted, questID)
-        if ok then return complete == true end
+        if ok then return safeBoolean(complete) end
     end
     return nil
 end
@@ -1081,17 +1240,18 @@ local function reputationMet(reputation, state)
     if reputation == nil then return true end
     if type(reputation) == "function" then
         local ok, result = safeCall(reputation, state)
-        return ok and result == true
+        return ok and safeBoolean(result)
     end
     local factionID, minimum = reputation, 0
     if type(reputation) == "table" then
         factionID = firstNonNil(reputation.factionID, reputation.id, reputation[1])
-        minimum = tonumber(firstNonNil(reputation.min, reputation.minimum, reputation.required, reputation[2])) or 0
+        minimum = safeNumber(firstNonNil(reputation.min, reputation.minimum, reputation.required, reputation[2])) or 0
     end
     if type(state.reputation) == "table" and state.reputation[factionID] ~= nil then
         local value = state.reputation[factionID]
         if type(value) == "table" then value = firstNonNil(value.standing, value.reputation, value.value) end
-        return tonumber(value) and tonumber(value) >= minimum
+        value = safeNumber(value)
+        return value ~= nil and value >= minimum
     end
     local api = state.api or _G
     local repAPI = api.C_Reputation or _G.C_Reputation
@@ -1099,6 +1259,7 @@ local function reputationMet(reputation, state)
         local ok, info = safeCall(repAPI.GetFactionDataByID, factionID)
         if ok and type(info) == "table" then
             local value = firstNonNil(info.currentStanding, info.standing, info.barValue)
+            value = safeNumber(value)
             if value ~= nil then return value >= minimum end
         end
     end
@@ -1107,17 +1268,19 @@ end
 
 local function locationMatches(location, state)
     if location == nil then return true end
+    if isSecretValue(location) then return nil end
     if type(location) == "function" then
         local ok, result = safeCall(location, state)
         if not ok then return nil end
-        return result == true
+        return safeBoolean(result)
     end
     if type(location) == "table" and (location.mapID or location.id or location[1]) then
         location = firstNonNil(location.mapID, location.id, location[1])
     end
     if type(location) == "number" then
-        if state.currentMapID == nil then return nil end
-        return state.currentMapID == location
+        local currentMapID = safeNumber(state.currentMapID)
+        if currentMapID == nil then return nil end
+        return currentMapID == location
     end
     if type(location) == "string" then
         if state.currentZoneName == nil then return nil end
@@ -1147,7 +1310,7 @@ local function professionRequirement(value, source, requirements)
         requirements.professionSkill,
         requirements.minProfessionSkill
     )
-    return name, tonumber(minimum)
+    return name, safeNumber(minimum)
 end
 
 local function professionDetail(state, name)
@@ -1157,7 +1320,7 @@ local function professionDetail(state, name)
     local detail = details[name] or details[key]
     if detail == nil and type(name) == "string" then detail = details[name:lower()] end
     if type(detail) == "number" then
-        return { skillLevel = detail }
+        return { skillLevel = safeNumber(detail) }
     end
     if type(detail) == "table" then return detail end
     return nil
@@ -1190,7 +1353,7 @@ local function requirementReason(source, state)
         end
         if minimumSkill then
             local detail = professionDetail(state, professionName)
-            local skillLevel = detail and tonumber(firstNonNil(detail.skillLevel, detail.currentSkill, detail.level))
+            local skillLevel = detail and safeNumber(firstNonNil(detail.skillLevel, detail.currentSkill, detail.level))
             if skillLevel == nil then return REASONS.REQUIREMENTS_NOT_MET end
             if skillLevel < minimumSkill then return REASONS.INSUFFICIENT_PROFESSION_SKILL end
         end
@@ -1272,7 +1435,11 @@ end
 -- sources.  Returning a reason (rather than only a boolean) keeps route
 -- diagnostics and UI explanations consistent across both edge families.
 function Sources.EvaluateRequirements(requirements, state, source)
-    state = state or Sources.CreatePlayerState()
+    if state then
+        state = copyState(state)
+    else
+        state = Sources.CreatePlayerState()
+    end
     local subject = {}
     for key, value in pairs(source or {}) do subject[key] = value end
     if type(requirements) ~= "table" then requirements = {} end
@@ -1280,9 +1447,17 @@ function Sources.EvaluateRequirements(requirements, state, source)
     return requirementReason(subject, state)
 end
 
+local function actionLookupKey(action)
+    if not action then return "unknown" end
+    return (safeKeyPart(action.type) or "unknown") .. ":" .. (safeKeyPart(action.id) or "unknown")
+end
+
 local function usability(action, state)
-    if state and state.usable and state.usable[action.type .. ":" .. tostring(action.id)] ~= nil then
-        return state.usable[action.type .. ":" .. tostring(action.id)] == true, true
+    local key = actionLookupKey(action)
+    if state and state.usable and key and state.usable[key] ~= nil then
+        local value = safeBoolean(state.usable[key])
+        if value == nil then return true, false end
+        return value, true
     end
     local api = state and state.api or _G
     if action.type == "spell" then
@@ -1290,21 +1465,25 @@ local function usability(action, state)
         local source = spellAPI and spellAPI.IsSpellUsable or api.IsUsableSpell
         if type(source) == "function" then
             local ok, usable = safeCall(source, action.id)
-            if ok then return usable == true, true end
+            if ok then
+                local value = safeBoolean(usable)
+                if value ~= nil then return value, true end
+                return true, false
+            end
         end
     elseif action.type == "item" or action.type == "toy" then
         local itemAPI = api.C_Item or C_Item
         local source = itemAPI and itemAPI.IsUsableItem or api.IsUsableItem
         if type(source) == "function" then
             local ok, usable = safeCall(source, action.id)
-            if ok then return usable == true, true end
+            if ok then
+                local value = safeBoolean(usable)
+                if value ~= nil then return value, true end
+                return true, false
+            end
         end
     end
     return true, false
-end
-
-local function actionLookupKey(action)
-    return action and (tostring(action.type) .. ":" .. tostring(action.id)) or "unknown"
 end
 
 local function readActionInfo(action, state)
@@ -1320,27 +1499,27 @@ local function readActionInfo(action, state)
         local spellAPI = api.C_Spell or C_Spell
         if not name and spellAPI and type(spellAPI.GetSpellName) == "function" then
             local ok, value = safeCall(spellAPI.GetSpellName, action.id)
-            if ok and type(value) == "string" and value ~= "" then name = value end
+            if ok then name = safeString(value) end
         end
         if not icon and spellAPI and type(spellAPI.GetSpellTexture) == "function" then
             local ok, value = safeCall(spellAPI.GetSpellTexture, action.id)
-            if ok and value then icon = value end
+            if ok then icon = safeDisplayValue(value) end
         end
         if (not name or not icon) and spellAPI and type(spellAPI.GetSpellInfo) == "function" then
             local ok, first, _, third = safeCall(spellAPI.GetSpellInfo, action.id)
-            if ok and type(first) == "table" then
-                name = name or first.name
-                icon = icon or first.iconID or first.icon
+            if ok and type(first) == "table" and not isSecretValue(first) then
+                name = name or safeString(first.name)
+                icon = icon or safeDisplayValue(first.iconID) or safeDisplayValue(first.icon)
             elseif ok then
-                name = name or (type(first) == "string" and first or nil)
-                icon = icon or third
+                name = name or safeString(first)
+                icon = icon or safeDisplayValue(third)
             end
         end
         if (not name or not icon) and type(api.GetSpellInfo) == "function" then
             local ok, value, _, valueIcon = safeCall(api.GetSpellInfo, action.id)
             if ok then
-                name = name or value
-                icon = icon or valueIcon
+                name = name or safeString(value)
+                icon = icon or safeDisplayValue(valueIcon)
             end
         end
     elseif action.type == "item" or action.type == "toy" then
@@ -1349,36 +1528,36 @@ local function readActionInfo(action, state)
             local toyAPI = api.C_ToyBox or C_ToyBox
             if toyAPI and type(toyAPI.GetToyInfo) == "function" then
                 local ok, first, second, third = safeCall(toyAPI.GetToyInfo, action.id)
-                if ok and type(first) == "table" then
-                    name = name or first.name or first.itemName
-                    icon = icon or first.icon or first.iconID
+                if ok and type(first) == "table" and not isSecretValue(first) then
+                    name = name or safeString(first.name) or safeString(first.itemName)
+                    icon = icon or safeDisplayValue(first.icon) or safeDisplayValue(first.iconID)
                 elseif ok then
-                    name = name or (type(first) == "string" and first or type(second) == "string" and second or nil)
-                    icon = icon or (type(first) == "number" and second or third)
+                    name = name or safeString(first) or safeString(second)
+                    icon = icon or safeDisplayValue(second) or safeDisplayValue(third)
                 end
             end
         end
         if not name and itemAPI and type(itemAPI.GetItemNameByID) == "function" then
             local ok, value = safeCall(itemAPI.GetItemNameByID, action.id)
-            if ok and type(value) == "string" and value ~= "" then name = value end
+            if ok then name = safeString(value) end
         end
         if (not name or not icon) and itemAPI and type(itemAPI.GetItemInfo) == "function" then
             local ok, first, _, _, _, _, _, _, _, valueIcon = safeCall(itemAPI.GetItemInfo, action.id)
-            if ok and type(first) == "table" then
-                name = name or first.name or first.itemName
-                icon = icon or first.icon or first.iconFileID
+            if ok and type(first) == "table" and not isSecretValue(first) then
+                name = name or safeString(first.name) or safeString(first.itemName)
+                icon = icon or safeDisplayValue(first.icon) or safeDisplayValue(first.iconFileID)
             elseif ok then
-                name = name or (type(first) == "string" and first or nil)
-                icon = icon or valueIcon
+                name = name or safeString(first)
+                icon = icon or safeDisplayValue(valueIcon)
             end
         end
         if not icon and itemAPI and type(itemAPI.GetItemIconByID) == "function" then
             local ok, value = safeCall(itemAPI.GetItemIconByID, action.id)
-            if ok and value then icon = value end
+            if ok then icon = safeDisplayValue(value) end
         end
         if not icon and itemAPI and type(itemAPI.GetItemInfoInstant) == "function" then
             local ok, _, _, _, _, value = safeCall(itemAPI.GetItemInfoInstant, action.id)
-            if ok and value then icon = value end
+            if ok then icon = safeDisplayValue(value) end
         end
     end
 
@@ -1390,8 +1569,8 @@ function Sources.ResolveActionPresentation(action, source, state)
     source = source or {}
     local name, icon = readActionInfo(action, state)
     return {
-        name = name or source.displayName or source.name,
-        icon = icon or source.icon,
+        name = name or safeString(source.displayName) or safeString(source.name),
+        icon = icon or safeDisplayValue(source.icon),
         actionType = action.type,
         actionID = action.id,
         sourceKey = source.sourceKey or source.key,
@@ -1457,10 +1636,17 @@ function Sources.BuildExplanation(evaluation)
     local source = evaluation.source or {}
     local destination = evaluation.destination or {}
     local resolved = destination.resolved == true or evaluation.destinationResolved == true
-    local destinationName = destination.displayName or destination.destinationName
-        or destination.name or evaluation.destinationName or source.destinationName
-        or source.destination or "Unknown destination"
-    local sourceName = evaluation.displayName or source.displayName or source.name or "Travel source"
+    local destinationName = safeString(destination.displayName)
+        or safeString(destination.destinationName)
+        or safeString(destination.name)
+        or safeString(evaluation.destinationName)
+        or safeString(source.destinationName)
+        or safeString(source.destination)
+        or "Unknown destination"
+    local sourceName = safeString(evaluation.displayName)
+        or safeString(source.displayName)
+        or safeString(source.name)
+        or "Travel source"
     local reason = evaluation.reason or REASONS.INVALID_SOURCE
     local explanation = {
         sourceType = sourceTypeForExplanation(evaluation),
@@ -1474,7 +1660,7 @@ function Sources.BuildExplanation(evaluation)
         destinationUncertain = not resolved or destination.dynamic == true,
         reason = reason,
         reasonText = evaluation.reasonText or REASON_TEXT[reason] or reason,
-        cooldown = math.max(0, tonumber(evaluation.cooldown) or 0),
+        cooldown = math.max(0, safeNumber(evaluation.cooldown) or 0),
         charges = copyValue(evaluation.charges),
         interaction = evaluation.interactionRequired or evaluation.interaction,
         requirements = copyValue(evaluation.requirements or source.requirements),
@@ -1516,7 +1702,11 @@ function Sources.Evaluate(source, state, options)
             routeEligible = false,
         }
     end
-    state = state or Sources.CreatePlayerState(options)
+    if state then
+        state = copyState(state, state.api or options.api)
+    else
+        state = Sources.CreatePlayerState(options)
+    end
 
     local result = copyValue(source)
     result.destination = Sources.ResolveDestination(source, state, options)
@@ -1582,12 +1772,19 @@ function Sources.Evaluate(source, state, options)
         local info = readSpellCooldown(spellID, state)
         result.cooldownInfo = info
         result.cooldown = remaining(info, state.now)
+        result.cooldownUnavailable = not info or info.unavailable == true
         if info and info.enabled == false then result.enabled = false end
-        result.charges = spellCharges(spellID, state, state.now)
+        local charges, chargesUnavailable = spellCharges(spellID, state, state.now)
+        result.charges = charges
+        result.chargesUnavailable = chargesUnavailable == true
         if result.charges and result.charges.current ~= nil and result.charges.current <= 0 then
             result.cooldown = math.max(result.cooldown, result.charges.recharge or 0)
         end
-        if not reason and result.known == nil then
+        if not reason and result.cooldownUnavailable then
+            reason = REASONS.API_UNAVAILABLE
+        elseif not reason and result.chargesUnavailable then
+            reason = REASONS.API_UNAVAILABLE
+        elseif not reason and result.known == nil then
             reason = REASONS.API_UNAVAILABLE
         elseif not reason and result.known == false then
             reason = REASONS.NOT_KNOWN
@@ -1604,6 +1801,7 @@ function Sources.Evaluate(source, state, options)
         result.collected = collected
         result.cooldownInfo = readItemCooldown(action.id, state)
         result.cooldown = remaining(result.cooldownInfo, state.now)
+        result.cooldownUnavailable = not result.cooldownInfo or result.cooldownInfo.unavailable == true
         if action.type == "toy" then
             result.owned = collected
             if not reason and collected == nil then
@@ -1636,7 +1834,11 @@ function Sources.Evaluate(source, state, options)
         if not reason and usable == false then reason = REASONS.UNUSABLE end
         if not reason and not usabilityKnown then reason = REASONS.USABILITY_UNKNOWN end
     end
-    if result.enabled and not reason and result.cooldown > 0 then reason = REASONS.ON_COOLDOWN end
+    if result.enabled and not reason and result.cooldownUnavailable then
+        reason = REASONS.API_UNAVAILABLE
+    elseif result.enabled and not reason and result.cooldown > 0 then
+        reason = REASONS.ON_COOLDOWN
+    end
     if result.enabled and not reason and not result.destinationResolved then
         reason = REASONS.DESTINATION_UNRESOLVED
     end

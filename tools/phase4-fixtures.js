@@ -73,6 +73,40 @@ const topologyConnections = [
     { from: 2339, to: 2248, mode: 'flightpath', cost: 180, bidirectional: true },
 ];
 
+const postTravelNodes = [
+    { id: 'player', kind: 'player' },
+    { id: 715, continent: 12, kind: 'hub', portalOnly: true },
+    { id: 69, continent: 12, kind: 'region' },
+    { id: 85, continent: 12, kind: 'hub' },
+    { id: 14, continent: 13, kind: 'region' },
+];
+
+const postTravelConnections = [
+    { from: 'player', to: 715, mode: 'teleport', cost: 5, ready: true },
+    { from: 715, to: 69, mode: 'portal', cost: 8, ready: true },
+];
+
+function addPostTravelFlightFallback(edges, nodes, startNode, targetNode) {
+    const target = nodes.find((node) => node.id === targetNode);
+    if (!target) return edges;
+
+    for (const node of nodes) {
+        if (node.id === 'player' || node.id === startNode || node.id === targetNode) continue;
+        if (node.portalOnly || node.continent !== target.continent) continue;
+        const outgoing = edges.get(node.id);
+        if (!outgoing || outgoing.some((edge) => edge.to === targetNode)) continue;
+        outgoing.push({
+            from: node.id,
+            to: targetNode,
+            mode: 'flight',
+            cost: 180,
+            ready: false,
+            accessState: 'unknown',
+        });
+    }
+    return edges;
+}
+
 const routeAlternatives = [
     { id: 'ready', ready: true, cost: 120, transitions: 3, interactions: 2 },
     { id: 'cooldown-fast', ready: false, cooldown: 30, cost: 40, transitions: 2, interactions: 1 },
@@ -95,6 +129,9 @@ module.exports = {
     choosePolicies,
     topologyNodes,
     topologyConnections,
+    postTravelNodes,
+    postTravelConnections,
+    addPostTravelFlightFallback,
     routeAlternatives,
     dungeonIdentity,
 };

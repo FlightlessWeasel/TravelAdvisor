@@ -21,9 +21,9 @@ function assertContains(source, text, message) {
 
 function testBestNowAndWaitPolicies() {
     for (const token of [
-        'result.readyNow == false',
-        'result.executableNow == false',
-        'result.actionableNow == false',
+        'SafeBoolean(result.readyNow) == false',
+        'SafeBoolean(result.executableNow) == false',
+        'SafeBoolean(result.actionableNow) == false',
         'Graph.Policy.BEST_IF_READY',
         'Graph.Policy.BEST_AFTER_WAIT',
         'route.isInformationalOnly = true',
@@ -56,9 +56,9 @@ function testCanonicalExplanations() {
         assertContains(sourcesSource + graphSource + advisorSource, token,
             `Canonical explanation contract is missing ${token}.`);
     }
-    assertContains(advisorSource, 'Source: " .. tostring(source.sourceName');
-    assertContains(advisorSource, 'Destination: " .. tostring(explanation.destinationName');
-    assertContains(advisorSource, 'Status: " .. tostring(reason.text');
+    assertContains(advisorSource, 'local sourceName = SafeText(source.sourceName');
+    assertContains(advisorSource, 'local destination = SafeText(explanation.destinationName');
+    assertContains(advisorSource, 'SafeText(reason.text)');
 }
 
 function testLocalizedNamesAndStableActions() {
@@ -97,7 +97,9 @@ function testCoalescedCombatSafeRefresh() {
         assertContains(advisorSource, token,
             `Safe coalesced refresh is missing ${token}.`);
     }
-    assertContains(advisorSource, 'self:SetAttribute("type", nil)');
+    assertContains(advisorSource, 'function TA:HideSecureActionButtons');
+    assert.ok(!advisorSource.includes('useBtn:SetScript("PreClick"'),
+        'Secure action attributes must not be mutated from a click-time Lua handler.');
     assertContains(advisorSource, 'if IsInCombatLockdown() then');
 }
 

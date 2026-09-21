@@ -698,6 +698,8 @@ Required change:
 
 - Add intermediate flight and transport hubs.
 - Allow paths such as current zone to hub to capital to portal room to target region.
+- Allow any resolved portal or teleport landing to continue through an eligible
+  region and an approximate final flight to the target.
 - Ensure each transition has its own access checks and estimated cost.
 
 Acceptance criteria:
@@ -825,7 +827,7 @@ Completion evidence:
     Commit or PR: Working tree; no commit created.
     Automated/static validation: TravelGraph consumes typed ZoneConnections and portal hubs, carries per-edge mode/access/timing/identity metadata, resolves parent/landing map contexts, and exposes Best Now, Best If Ready, Best After Wait, fewest-transition, fewest-interaction, and closest-useful policies. `node tools/phase0.test.js`, `node tools/phase1.test.js`, `node tools/phase2.test.js`, `node tools/phase3.test.js`, and `node tools/phase4.test.js` pass. The full validator still reports the pre-existing duplicate coordinate, duplicate source, and unresolved dynamic-source findings.
     In-game evidence: Pending; exact flight-path discovery, transport schedules, dungeon instance/entrance IDs, phase state, and live secure-action behavior remain in the verification matrix.
-    Notes: Flight and movement estimates are explicit approximations with confidence metadata. Conditional flightpath/taxi edges are excluded from `Best Now` until discovery/access is known. Unverified dungeon instance and entrance IDs use `0` metadata and never become route destinations; routes target the explicit landing/region map instead.
+    Notes: Flight and movement estimates are explicit approximations with confidence metadata. Conditional flightpath/taxi edges and target-directed post-travel flight fallbacks are excluded from `Best Now` until discovery/access is known. The fallback is only generated after leaving the current routing node, so the graph does not become an unqualified all-pairs same-continent graph. Unverified dungeon instance and entrance IDs use `0` metadata and never become route destinations; routes target the explicit landing/region map instead.
 
 ## Phase 5 — Data integrity, coverage, and maintenance
 

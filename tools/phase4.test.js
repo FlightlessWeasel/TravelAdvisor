@@ -9,6 +9,9 @@ const {
     choosePolicies,
     topologyNodes,
     topologyConnections,
+    postTravelNodes,
+    postTravelConnections,
+    addPostTravelFlightFallback,
     routeAlternatives,
     dungeonIdentity,
 } = require('./phase4-fixtures');
@@ -50,6 +53,34 @@ function testExplicitTopologyAndIntermediateHubs() {
     assertContains(graphSource, 'bidirectional == true');
     assertNotContains(graphSource, 'Add implicit flight edge to DESTINATION only');
     assertNotContains(graphSource, 'GetFlightDistance(currentNode, toMapID)');
+}
+
+function testPostTravelFlightComposition() {
+    const graph = buildExplicitGraph(postTravelNodes, postTravelConnections);
+    addPostTravelFlightFallback(graph, postTravelNodes, 14, 85);
+
+    const route = findPath(graph, 'player', 85);
+    assert.ok(route, 'A portal/teleport route should continue through a reachable region to the target.');
+    assert.deepStrictEqual(route.path.map((edge) => edge.to), [715, 69, 85]);
+    assert.deepStrictEqual(route.path.map((edge) => edge.mode), [
+        'teleport', 'portal', 'flight',
+    ]);
+    assert.strictEqual(route.path[2].accessState, 'unknown',
+        'The inferred final flight must remain conditional until access is discovered.');
+
+    const readyRoute = findPath(graph, 'player', 85, { readyOnly: true });
+    assert.strictEqual(readyRoute, null,
+        'An unknown inferred flight must not be presented as executable Best Now travel.');
+
+    const directStartGraph = buildExplicitGraph(postTravelNodes, postTravelConnections);
+    addPostTravelFlightFallback(directStartGraph, postTravelNodes, 69, 85);
+    assert.strictEqual(findPath(directStartGraph, 69, 85), null,
+        'The fallback must not restore an unqualified direct flight from the current node.');
+
+    const crossContinent = buildExplicitGraph(postTravelNodes, postTravelConnections);
+    addPostTravelFlightFallback(crossContinent, postTravelNodes, 14, 85);
+    assert.strictEqual(crossContinent.get(14).some((edge) => edge.to === 85), false,
+        'Post-travel flight fallback must not cross continents.');
 }
 
 function testTravelModeAndAccessMetadata() {
@@ -95,6 +126,17 @@ function testPoliciesAndCooldownWait() {
     assertContains(graphSource, 'FEWEST_INTERACTIONS');
     assertContains(graphSource, 'FindClosestUsefulPath');
     assertContains(graphSource, 'usefulLanding');
+    assertContains(graphSource, 'function Graph:BuildPostTravelFlightEdge');
+    assertContains(graphSource, 'post-travel-flight');
+    assertContains(graphSource, 'fromMapID == startNodeID');
+    assertContains(graphSource, 'currentNode ~= Graph.PLAYER_NODE');
+    assertContains(graphSource, 'Static-edge `location` is provenance');
+    assertContains(graphSource, 'record.locationID');
+    assertNotContains(graphSource, 'TA.TravelSources:CreatePlayerState');
+    assertNotContains(graphSource, 'TA.TravelSources:EvaluateAll');
+    assertNotContains(graphSource, 'TA.TravelSources:FindByAction');
+    assertNotContains(graphSource, 'TA.TravelSources:FindByKey');
+    assertNotContains(graphSource, 'TA.TravelSources:Evaluate(');
     assertContains(advisorSource, 'Best After Wait');
     assertContains(advisorSource, 'BuildRouteCacheKey');
 }
@@ -115,6 +157,16 @@ function testDungeonIdentitiesAndUnsupportedMaps() {
     assertContains(validatorSource, 'DungeonIdentityPolicy');
 }
 
+function testApproximateMapsDoNotCollapseToAlreadyHere() {
+    assertContains(graphSource, 'function Graph:IsExactRoutingMatch');
+    assertContains(graphSource, 'context.routeMapID ~= mapID');
+    assertContains(graphSource, 'if startNode == targetNode and self:IsExactRoutingMatch');
+    assertContains(advisorSource, 'and Graph:IsExactRoutingMatch(');
+    assertContains(dataSource, '[2393] = {');
+    assertContains(dataSource, '[48] = { x = 45, y = 50, continent = 13 }');
+    assertContains(dataSource, '["loch modan"] = 48');
+}
+
 function testPhaseDocumentation() {
     for (const id of ['TA-401', 'TA-402', 'TA-403', 'TA-404', 'TA-405', 'TA-406', 'TA-407']) {
         assert.ok(planSource.includes(`### [x] ${id}`), `${id} must be marked complete.`);
@@ -123,8 +175,10 @@ function testPhaseDocumentation() {
 }
 
 testExplicitTopologyAndIntermediateHubs();
+testPostTravelFlightComposition();
 testTravelModeAndAccessMetadata();
 testPoliciesAndCooldownWait();
 testDungeonIdentitiesAndUnsupportedMaps();
+testApproximateMapsDoNotCollapseToAlreadyHere();
 testPhaseDocumentation();
 console.log('Phase 4 contract tests: PASS');

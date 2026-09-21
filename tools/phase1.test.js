@@ -44,11 +44,17 @@ function testBindNodeAndHubResolution() {
 function testRouteActionSafety() {
     assertContains(advisorSource, 'function TA:IsRouteActionable(route)', 'Routes need an explicit executable state.');
     assertContains(advisorSource, 'route.isOptimalOnly', 'Best If Ready routes must not be executable.');
-    assertContains(advisorSource, 'route.actionableNow == false', 'Route actionability must be checked before creating a button.');
-    assertContains(advisorSource, 'travel.cooldown or 0', 'Source cooldown must be checked before creating a button.');
+    assertContains(advisorSource, 'SafeBoolean(route.actionableNow) ~= true', 'Route actionability must be checked before creating a button.');
+    assertContains(advisorSource, 'SafeNumber(travel.cooldown, 0)', 'Source cooldown must be checked before creating a button.');
     assertContains(advisorSource, 'function TA:GetSecureActionConfig(travel)', 'Secure action metadata must be centralized.');
     assertContains(advisorSource, 'function TA:GetTravelActionAvailability(travel)', 'Use actions need a live availability check.');
-    assertContains(advisorSource, 'useBtn:SetScript("PreClick"', 'Use actions need a pre-click revalidation hook.');
+    assertContains(advisorSource, 'CreateFrame("Button", nil, mainFrame, "SecureActionButtonTemplate")', 'Secure buttons must be children of the stable route window.');
+    assert.ok(!/useBtn:SetParent\(row\)/.test(advisorSource),
+        'Secure action buttons must not be reparented into rebuilt result rows.');
+    assert.ok(!advisorSource.includes('CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")'),
+        'Secure buttons must not be children of UIParent.');
+    assert.ok(!advisorSource.includes('useBtn:SetScript("PreClick"'),
+        'Secure action attributes must not be mutated from a click-time Lua handler.');
     assertContains(advisorSource, 'useBtn:SetAttribute("type", actionConfig.type)', 'Buttons must use the resolved action type.');
     assertContains(advisorSource, 'useBtn:SetAttribute(actionConfig.type, actionConfig.value)', 'Buttons must use the resolved stable action ID.');
     assert.ok(
@@ -81,6 +87,8 @@ function testCombatAndInvalidation() {
     assertContains(advisorSource, 'function TA:QueueRouteRefresh(reason)', 'State changes must share one coalesced refresh path.');
     assertContains(advisorSource, 'self._routeRefreshScheduled', 'Refresh bursts must be coalesced.');
     assertContains(advisorSource, 'function TA:ScheduleCooldownRefresh(seconds)', 'Cooldown expiry must trigger a refresh.');
+    assert.ok(/function TA:QueueRouteRefresh\([\s\S]*?self:HideSecureActionButtons\(\)/.test(advisorSource),
+        'Availability invalidation must hide stale secure buttons immediately before the deferred refresh.');
 
     for (const event of [
         'SPELL_UPDATE_COOLDOWN',
