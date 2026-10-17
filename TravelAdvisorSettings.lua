@@ -5,11 +5,14 @@
 local _, TA = ...
 
 local Settings = {
-    VERSION = 1,
+    VERSION = 2,
+    MAX_DEBUG_LOGS = 100,
+    MAX_DEBUG_TEXT = 80,
     DEFAULTS = {
         routePolicy = "best-now",
         showAlternatives = true,
         showExplanations = true,
+        debugLogging = false,
     },
     POLICY_ORDER = {
         "best-now",
@@ -34,6 +37,36 @@ end
 local function normalizeBoolean(value, defaultValue)
     if value == nil then return defaultValue end
     return value == true
+end
+
+local function normalizeDebugText(value, limit)
+    if type(value) ~= "string" then return nil end
+    value = value:gsub("[%c]", " "):sub(1, limit)
+    if value == "" then return nil end
+    return value
+end
+
+local function normalizeDebugLogs(logs)
+    local result = {}
+    if type(logs) ~= "table" then return result end
+    local first = math.max(1, #logs - Settings.MAX_DEBUG_LOGS + 1)
+    for index = first, #logs do
+        local entry = logs[index]
+        if type(entry) == "table" then
+            local event = normalizeDebugText(entry.event, 40)
+            if event then
+                result[#result + 1] = {
+                    timestamp = normalizeDebugText(entry.timestamp, 32) or "unknown",
+                    event = event,
+                    mapID = type(entry.mapID) == "number" and entry.mapID or nil,
+                    mapName = normalizeDebugText(entry.mapName, Settings.MAX_DEBUG_TEXT),
+                    realZone = normalizeDebugText(entry.realZone, Settings.MAX_DEBUG_TEXT),
+                    subZone = normalizeDebugText(entry.subZone, Settings.MAX_DEBUG_TEXT),
+                }
+            end
+        end
+    end
+    return result
 end
 
 function Settings:NormalizePolicy(policy)
@@ -67,6 +100,8 @@ function Settings:Load(saved)
     values.routePolicy = self:NormalizePolicy(values.routePolicy)
     values.showAlternatives = normalizeBoolean(values.showAlternatives, defaults.showAlternatives)
     values.showExplanations = normalizeBoolean(values.showExplanations, defaults.showExplanations)
+    values.debugLogging = normalizeBoolean(values.debugLogging, defaults.debugLogging)
+    values.debugLogs = normalizeDebugLogs(values.debugLogs)
 
     self.values = values
     _G.TravelAdvisor_Settings = values
@@ -82,10 +117,23 @@ function Settings:Set(key, value)
     if not self.values then self:Load(_G.TravelAdvisor_Settings) end
     if key == "routePolicy" then
         value = self:NormalizePolicy(value)
-    elseif key == "showAlternatives" or key == "showExplanations" then
+    elseif key == "showAlternatives" or key == "showExplanations" or key == "debugLogging" then
         value = value == true
+    elseif key == "debugLogs" then
+        value = normalizeDebugLogs(value)
     end
     self.values[key] = value
+    _G.TravelAdvisor_Settings = self.values
+end
+
+function Settings:AddDebugLog(entry)
+    if not self.values then self:Load(_G.TravelAdvisor_Settings) end
+    local logs = normalizeDebugLogs(self.values.debugLogs)
+    local normalized = normalizeDebugLogs({ entry })
+    if #normalized == 0 then return end
+    logs[#logs + 1] = normalized[1]
+    if #logs > self.MAX_DEBUG_LOGS then table.remove(logs, 1) end
+    self.values.debugLogs = logs
     _G.TravelAdvisor_Settings = self.values
 end
 

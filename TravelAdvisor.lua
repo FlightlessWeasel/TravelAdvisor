@@ -78,7 +78,8 @@ TA.availableTravel = {}
 TA.playerClass = nil
 TA.playerRace = nil
 TA.playerFaction = nil
-TA.debugMode = false  -- Set to true to see debug output
+local settings = TA.TravelAdvisorSettings or TA.Settings
+TA.debugMode = settings and settings:Get("debugLogging") == true or false
 
 -- Forward declaration for UI frame
 local mainFrame = nil
@@ -160,6 +161,58 @@ end
 
 local function GetSettings()
     return TA.TravelAdvisorSettings or TA.Settings
+end
+
+local lastTransitionSnapshot
+
+local function GetDebugLocationSnapshot()
+    local mapID, mapName, realZone, subZone
+    if C_Map and type(C_Map.GetBestMapForUnit) == "function" then
+        local ok, value = pcall(C_Map.GetBestMapForUnit, "player")
+        if ok then mapID = SafeNumber(value) end
+    end
+    if mapID and C_Map and type(C_Map.GetMapInfo) == "function" then
+        local ok, info = pcall(C_Map.GetMapInfo, mapID)
+        if ok and type(info) == "table" then mapName = SafeString(info.name) end
+    end
+    if type(_G.GetRealZoneText) == "function" then
+        local ok, value = pcall(_G.GetRealZoneText)
+        if ok then realZone = SafeString(value) end
+    end
+    if type(_G.GetSubZoneText) == "function" then
+        local ok, value = pcall(_G.GetSubZoneText)
+        if ok then subZone = SafeString(value) end
+    end
+    return { mapID = mapID, mapName = mapName, realZone = realZone, subZone = subZone }
+end
+
+local function DebugSnapshotKey(snapshot)
+    return table.concat({
+        tostring(snapshot.mapID or "invalid"), snapshot.mapName or "", snapshot.realZone or "", snapshot.subZone or "",
+    }, "|")
+end
+
+local function DebugTimestamp()
+    -- GetTime is already used by this addon and provides a stable session timestamp.
+    local ok, value = pcall(GetTime)
+    return ok and string.format("session+%.2f", SafeNumber(value, 0)) or "session+unknown"
+end
+
+local function RecordDebugTransition(event, onlyIfChanged)
+    local settings = GetSettings()
+    if not settings or settings:Get("debugLogging") ~= true then return end
+    local snapshot = GetDebugLocationSnapshot()
+    if onlyIfChanged and lastTransitionSnapshot
+        and DebugSnapshotKey(snapshot) == DebugSnapshotKey(lastTransitionSnapshot) then
+        return
+    end
+    local record = {
+        timestamp = DebugTimestamp(), event = event,
+        mapID = snapshot.mapID, mapName = snapshot.mapName,
+        realZone = snapshot.realZone, subZone = snapshot.subZone,
+    }
+    if settings.AddDebugLog then settings:AddDebugLog(record) end
+    lastTransitionSnapshot = snapshot
 end
 
 local function GetSelectedPolicy()
@@ -285,16 +338,19 @@ TA.waypointMapIDs = {}
 -- Called when entering a loading screen (portal, instance, etc.)
 function TA:OnLoadingStart()
     self.isInLoadingScreen = true
+    RecordDebugTransition("LOADING_SCREEN_ENABLED")
     -- frameWasOpen should already be set from when we opened the frame
 end
 
 -- Called when loading screen ends
 function TA:OnLoadingEnd()
     self.isInLoadingScreen = false
+    RecordDebugTransition("LOADING_SCREEN_DISABLED")
 end
 
 -- Check if we should switch arrow when zoning
 function TA:OnZoneChanged()
+    RecordDebugTransition("POST_DEBOUNCE_LOCATION", true)
     if not self.playerClass then
         self.playerClass = select(2, UnitClass("player"))
         self.playerRace = select(2, UnitRace("player"))
@@ -2231,6 +2287,45 @@ function TA:UpdateSettingsControls()
     if mainFrame and mainFrame.detailsButton then
         mainFrame.detailsButton:SetText(settings:Get("showExplanations") and "Details: On" or "Details: Off")
     end
+    if mainFrame and mainFrame.debugButton then
+        mainFrame.debugButton:SetText(settings:Get("debugLogging") and "Debug: On" or "Debug: Off")
+    end
+end
+
+function TA:ToggleDebugLogging()
+    local settings = GetSettings()
+    if not settings then return end
+    local enabled = not settings:Get("debugLogging")
+    settings:Set("debugLogging", enabled)
+    self.debugMode = enabled
+    self:UpdateSettingsControls()
+    if enabled then RecordDebugTransition("DEBUG_LOGGING_ENABLED") end
+    Print("Debug logging: " .. (enabled and "|cff00ff00ON|r" or "|cffff0000OFF|r"))
+end
+
+local function BuildDebugLogReport()
+    local settings = GetSettings()
+    local logs = settings and settings:Get("debugLogs") or {}
+    local lines = {
+        "Travel Advisor debug transition logs",
+        "Prompt: Review these bounded transition records to help diagnose instance and zone changes.",
+        "Logs remain on this character and are not sent automatically.",
+        "BEGIN_DATA",
+    }
+    for index, entry in ipairs(logs) do
+        lines[#lines + 1] = string.format(
+            "[%03d] timestamp=%s event=%s mapID=%s mapName=%s realZone=%s subZone=%s",
+            index, entry.timestamp or "unknown", entry.event or "unknown",
+            entry.mapID and tostring(entry.mapID) or "invalid",
+            entry.mapName or "unknown", entry.realZone or "unknown", entry.subZone or "unknown"
+        )
+    end
+    lines[#lines + 1] = "END_DATA"
+    return table.concat(lines, "\n")
+end
+
+function TA:ShowDebugLogs()
+    self:ShowTroubleshootingReport(BuildDebugLogReport(), "Debug Logs")
 end
 
 function TA:CycleRoutePolicy()
@@ -2738,12 +2833,12 @@ local function CreateTroubleshootingFrame()
 
     local instruction = troubleshootingFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     instruction:SetPoint("TOPLEFT", 20, -43)
-    instruction:SetText("Click Copy to select the report, then press Ctrl+C. No report data is sent automatically.")
+    instruction:SetText("Click Select All, then press Ctrl+C. No report data is sent automatically.")
 
     local copyButton = CreateFrame("Button", nil, troubleshootingFrame, "UIPanelButtonTemplate")
     copyButton:SetSize(90, 22)
     copyButton:SetPoint("TOPRIGHT", -45, -35)
-    copyButton:SetText("Copy")
+    copyButton:SetText("Select All")
     copyButton:SetScript("OnClick", function()
         if not troubleshootingEditBox then return end
         troubleshootingEditBox:SetFocus()
@@ -2752,6 +2847,12 @@ local function CreateTroubleshootingFrame()
             troubleshootingStatus:SetText("|cFF00FF00Text selected. Press Ctrl+C to copy.|r")
         end
     end)
+
+    local explicitCloseButton = CreateFrame("Button", nil, troubleshootingFrame, "UIPanelButtonTemplate")
+    explicitCloseButton:SetSize(70, 22)
+    explicitCloseButton:SetPoint("RIGHT", copyButton, "LEFT", -5, 0)
+    explicitCloseButton:SetText("Close")
+    explicitCloseButton:SetScript("OnClick", function() troubleshootingFrame:Hide() end)
 
     troubleshootingStatus = troubleshootingFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     troubleshootingStatus:SetPoint("TOPLEFT", instruction, "BOTTOMLEFT", 0, -3)
@@ -3037,6 +3138,18 @@ local function CreateMainFrame()
         TA:ToggleRouteExplanations()
     end)
     mainFrame.detailsButton = detailsBtn
+
+    local debugBtn = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
+    debugBtn:SetSize(78, 22)
+    debugBtn:SetPoint("LEFT", detailsBtn, "RIGHT", 5, 0)
+    debugBtn:SetScript("OnClick", function() TA:ToggleDebugLogging() end)
+    mainFrame.debugButton = debugBtn
+
+    local logsBtn = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
+    logsBtn:SetSize(60, 22)
+    logsBtn:SetPoint("LEFT", debugBtn, "RIGHT", 5, 0)
+    logsBtn:SetText("Logs")
+    logsBtn:SetScript("OnClick", function() TA:ShowDebugLogs() end)
 
     TA:UpdateSettingsControls()
     
@@ -4367,6 +4480,9 @@ eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
+        local settings = GetSettings()
+        TA.debugMode = settings and settings:Get("debugLogging") == true or false
+        RecordDebugTransition("PLAYER_LOGIN")
         TA.playerClass = select(2, UnitClass("player"))
         TA.playerRace = select(2, UnitRace("player"))
         TA.playerFaction = UnitFactionGroup("player")
@@ -4390,6 +4506,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end)
         end
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+        RecordDebugTransition(event)
         if not TA._zoneChangePending then
             TA._zoneChangePending = true
             C_Timer.After(0.5, function()
@@ -4457,11 +4574,12 @@ SlashCmdList["TRAVELADVISOR"] = function(msg)
             end
         end
     elseif msg == "verbose" then
-        TA.debugMode = not TA.debugMode
-        Print("Verbose debug mode: " .. (TA.debugMode and "|cff00ff00ON|r" or "|cffff0000OFF|r"))
+        TA:ToggleDebugLogging()
         if TA.debugMode then
             Print("Run /travel scan to see detailed cooldown info in chat.")
         end
+    elseif msg == "logs" then
+        TA:ShowDebugLogs()
     elseif msg == "graph" then
         -- Graph debug command
         if TA.TravelGraph then

@@ -49,7 +49,7 @@ function testPasteReadyReportEnvelope() {
 function testModalCopyInteraction() {
     for (const token of [
         'ShowTroubleshootingReport',
-        'SetText("Copy")',
+        'SetText("Select All")',
         'HighlightText()',
         'SetFocus()',
     ]) {

@@ -107,7 +107,7 @@ function testVersionedSettings() {
     assertContains(tocSource, '## SavedVariablesPerCharacter: TravelAdvisor_Settings');
     assertContains(tocSource, 'TravelAdvisorSettings.lua');
     for (const token of [
-        'VERSION = 1',
+        'VERSION = 2',
         'DEFAULTS',
         'function Settings:Load',
         'values.version = self.VERSION',

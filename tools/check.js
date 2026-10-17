@@ -13,6 +13,7 @@ const checks = [
     ['Phase 5 contract tests', path.join(__dirname, 'phase5.test.js')],
     ['Phase 6 contract tests', path.join(__dirname, 'phase6.test.js')],
     ['Phase 7 contract tests', path.join(__dirname, 'phase7.test.js')],
+    ['Debug logs contract tests', path.join(__dirname, 'debug-logs.test.js')],
     ['Secret-value safety regression', path.join(__dirname, 'secret-safety.test.js')],
     ['Taint-safety regression', path.join(__dirname, 'taint-safety.test.js')],
     ['Post-travel flight regression', path.join(__dirname, 'post-travel-flight.test.js')],
