@@ -6,8 +6,6 @@ local _, TA = ...
 
 local Settings = {
     VERSION = 2,
-    MAX_DEBUG_LOGS = 100,
-    MAX_DEBUG_TEXT = 80,
     DEFAULTS = {
         routePolicy = "best-now",
         showAlternatives = true,
@@ -39,9 +37,9 @@ local function normalizeBoolean(value, defaultValue)
     return value == true
 end
 
-local function normalizeDebugText(value, limit)
+local function normalizeDebugText(value)
     if type(value) ~= "string" then return nil end
-    value = value:gsub("[%c]", " "):sub(1, limit)
+    value = value:gsub("[%c]", " ")
     if value == "" then return nil end
     return value
 end
@@ -49,19 +47,18 @@ end
 local function normalizeDebugLogs(logs)
     local result = {}
     if type(logs) ~= "table" then return result end
-    local first = math.max(1, #logs - Settings.MAX_DEBUG_LOGS + 1)
-    for index = first, #logs do
+    for index = 1, #logs do
         local entry = logs[index]
         if type(entry) == "table" then
-            local event = normalizeDebugText(entry.event, 40)
+            local event = normalizeDebugText(entry.event)
             if event then
                 result[#result + 1] = {
-                    timestamp = normalizeDebugText(entry.timestamp, 32) or "unknown",
+                    timestamp = normalizeDebugText(entry.timestamp) or "unknown",
                     event = event,
                     mapID = type(entry.mapID) == "number" and entry.mapID or nil,
-                    mapName = normalizeDebugText(entry.mapName, Settings.MAX_DEBUG_TEXT),
-                    realZone = normalizeDebugText(entry.realZone, Settings.MAX_DEBUG_TEXT),
-                    subZone = normalizeDebugText(entry.subZone, Settings.MAX_DEBUG_TEXT),
+                    mapName = normalizeDebugText(entry.mapName),
+                    realZone = normalizeDebugText(entry.realZone),
+                    subZone = normalizeDebugText(entry.subZone),
                 }
             end
         end
@@ -128,12 +125,14 @@ end
 
 function Settings:AddDebugLog(entry)
     if not self.values then self:Load(_G.TravelAdvisor_Settings) end
-    local logs = normalizeDebugLogs(self.values.debugLogs)
     local normalized = normalizeDebugLogs({ entry })
     if #normalized == 0 then return end
+    local logs = self.values.debugLogs
+    if type(logs) ~= "table" then
+        logs = {}
+        self.values.debugLogs = logs
+    end
     logs[#logs + 1] = normalized[1]
-    if #logs > self.MAX_DEBUG_LOGS then table.remove(logs, 1) end
-    self.values.debugLogs = logs
     _G.TravelAdvisor_Settings = self.values
 end
 

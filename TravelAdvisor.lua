@@ -2301,15 +2301,21 @@ function TA:ToggleDebugLogging()
     self:UpdateSettingsControls()
     if enabled then RecordDebugTransition("DEBUG_LOGGING_ENABLED") end
     Print("Debug logging: " .. (enabled and "|cff00ff00ON|r" or "|cffff0000OFF|r"))
+    if enabled then
+        Print("Logs are saved per character to D:\\Battle.net\\World of Warcraft\\_retail_\\WTF\\Account\\<ACCOUNT>\\<REALM>\\<CHARACTER>\\SavedVariables\\TravelAdvisor.lua on logout or reload.")
+    end
 end
 
 local function BuildDebugLogReport()
     local settings = GetSettings()
     local logs = settings and settings:Get("debugLogs") or {}
+    local savedVariablesPath = "D:\\Battle.net\\World of Warcraft\\_retail_\\WTF\\Account\\<ACCOUNT>\\<REALM>\\<CHARACTER>\\SavedVariables\\TravelAdvisor.lua"
     local lines = {
         "Travel Advisor debug transition logs",
-        "Prompt: Review these bounded transition records to help diagnose instance and zone changes.",
-        "Logs remain on this character and are not sent automatically.",
+        "Prompt: Review these transition records to help diagnose instance and zone changes.",
+        "Saved per character in the WoW-managed SavedVariables file below; WoW writes it on logout or reload.",
+        "Location: " .. savedVariablesPath,
+        "This is TravelAdvisor_Settings.debugLogs inside TravelAdvisor.lua, not a standalone text file.",
         "BEGIN_DATA",
     }
     for index, entry in ipairs(logs) do

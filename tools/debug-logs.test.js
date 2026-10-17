@@ -22,20 +22,36 @@ function testSettingsHarness() {
     assert.match(result.result.stdout, /Debug logs settings regression: PASS/);
 }
 
-function testBoundedVersionedSettingsContract() {
+function testUnboundedVersionedSettingsContract() {
     for (const token of [
         'VERSION = 2',
         'debugLogging = false',
-        'MAX_DEBUG_LOGS = 100',
-        'MAX_DEBUG_TEXT = 80',
         'local function normalizeDebugLogs(logs)',
-        'timestamp = normalizeDebugText(entry.timestamp, 32)',
+        'timestamp = normalizeDebugText(entry.timestamp)',
         'mapID = type(entry.mapID) == "number" and entry.mapID or nil',
-        'realZone = normalizeDebugText(entry.realZone, Settings.MAX_DEBUG_TEXT)',
-        'subZone = normalizeDebugText(entry.subZone, Settings.MAX_DEBUG_TEXT)',
+        'realZone = normalizeDebugText(entry.realZone)',
+        'subZone = normalizeDebugText(entry.subZone)',
         'function Settings:AddDebugLog(entry)',
-        'if #logs > self.MAX_DEBUG_LOGS then table.remove(logs, 1) end',
     ]) assertContains(settingsSource, token);
+    assert.ok(!settingsSource.includes('MAX_DEBUG_LOGS'), 'debug log history must not be capped');
+    assert.ok(!settingsSource.includes('MAX_DEBUG_TEXT'), 'debug text fields must not be truncated');
+}
+
+function testSavedVariableDisclosure() {
+    assertContains(advisorSource, 'function TA:ToggleDebugLogging()');
+    const toggleStart = advisorSource.indexOf('function TA:ToggleDebugLogging()');
+    const toggleEnd = advisorSource.indexOf('\nend', toggleStart);
+    const enableNotice = advisorSource.slice(toggleStart, toggleEnd);
+    assertContains(enableNotice, 'SavedVariables\\\\TravelAdvisor.lua', 'Enable notice must disclose the SavedVariables file.');
+    assertContains(enableNotice, 'logout or reload', 'Enable notice must disclose WoW save timing.');
+
+    const viewerStart = advisorSource.indexOf('local function BuildDebugLogReport()');
+    const viewerEnd = advisorSource.indexOf('\nend', viewerStart);
+    const viewer = advisorSource.slice(viewerStart, viewerEnd);
+    assertContains(advisorSource, 'local savedVariablesPath = "D:\\\\Battle.net', 'A per-character SavedVariables path must be defined.');
+    assertContains(viewer, 'Location: " .. savedVariablesPath', 'Logs viewer must disclose the SavedVariables file path.');
+    assertContains(viewer, 'TravelAdvisor_Settings.debugLogs', 'Logs viewer must identify the stored table.');
+    assertContains(viewer, 'logout or reload', 'Logs viewer must disclose WoW save timing.');
 }
 
 function testLocationTransitionCaptureAndControls() {
@@ -60,7 +76,7 @@ function testLocationTransitionCaptureAndControls() {
         'elseif msg == "logs" then',
         'copyButton:SetText("Select All")',
         'explicitCloseButton:SetText("Close")',
-        'Prompt: Review these bounded transition records',
+        'Prompt: Review these transition records',
         'BEGIN_DATA',
         'END_DATA',
     ]) assertContains(advisorSource, token);
@@ -68,6 +84,7 @@ function testLocationTransitionCaptureAndControls() {
 }
 
 testSettingsHarness();
-testBoundedVersionedSettingsContract();
+testUnboundedVersionedSettingsContract();
 testLocationTransitionCaptureAndControls();
+testSavedVariableDisclosure();
 console.log('Debug logs contract tests: PASS');
